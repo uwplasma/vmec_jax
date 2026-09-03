@@ -212,6 +212,51 @@ def test_polish_certificate_summary_names_failed_checks():
     assert "FAILED CHECK : independent force L2" in failed
 
 
+def test_polish_certificate_summary_discloses_the_eps_f_ceiling():
+    """A block that quotes eps_F must also say what eps_F cannot do.
+
+    ``eps_F`` is bounded above by 2, so on a low-beta or vacuum state both
+    ends of the pair sit at the ceiling and the pair reports nothing.  The
+    block therefore names the bound and prints the non-saturating measures
+    beside it; an undefined measure prints ``n/a`` rather than a floored
+    number that would read as a real one.
+    """
+    summary = printing.polish_certificate_summary(
+        1.918, 1.791, 1e-2, verdict="FAILED",
+        failed_checks=("independent force L2 1.791E+00 > tolerance 1.000E-02",),
+        measures=(
+            ("<|F|>  [N m^-3]", 2.039e1, 1.090e1),
+            ("<|F|>/<|grad p|>", float("nan"), float("nan")),
+            ("<|F|>/<|grad B^2/2mu0|>", 2.542e-3, 1.360e-3),
+        ),
+        window=(0.1, 0.99))
+    assert "EPS-F IS BOUNDED BY 2 BY CONSTRUCTION" in summary
+    assert "2.039E+01 ->  1.090E+01" in summary
+    assert "<|F|>/<|grad p|>                     n/a ->        n/a" in summary
+    assert "(volume averages over s in [0.10, 0.99])" in summary
+    assert "POLISH FAILED" in summary
+    assert max(len(line) for line in summary.splitlines()) <= 120
+
+
+def test_polish_certificate_summary_without_measures_is_unchanged():
+    """Callers that pass no measures keep the exact shipped block."""
+    assert printing.polish_certificate_summary(
+        1.281e-2, 1.807e-3, 1e-2, verdict="CERTIFIED") == (
+        "\n POLISH CERTIFICATE : EPS-F  1.281E-02 ->  1.807E-03"
+        "  (TOLERANCE  1.000E-02)\n POLISH CERTIFIED\n")
+
+
+def test_force_error_rows_render_single_and_paired_states():
+    single = printing.force_error_rows(
+        (("<|F|>  [N m^-3]", 2.039e1, None),))
+    assert single == ("   <|F|>  [N m^-3]                2.039E+01",)
+    paired = printing.force_error_rows(
+        (("<|F|>  [N m^-3]", 2.039e1, 1.090e1),), window=(0.1, 0.99))
+    assert paired[0].endswith("2.039E+01 ->  1.090E+01")
+    assert paired[1] == "   (volume averages over s in [0.10, 0.99])"
+    assert printing.force_error_rows((), window=(0.1, 0.99)) == ()
+
+
 def test_emit_flushed_writes_and_flushes(capsys):
     """The CLI sink must flush every line so file-redirected cluster logs
     stream in real time (an unflushed run shows nothing for hours)."""

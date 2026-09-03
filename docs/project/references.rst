@@ -223,3 +223,12 @@ Numerical implementation:
     Interface,” *ACM Transactions on Mathematical Software* 31, 302–325
     (2005) — globally pivoted sparse factorization used for the equilibrated
     block-banded radial solve, doi:10.1145/1089014.1089017.
+
+48. D. Panici, R. Conlin, D. W. Dudt, K. Unalmis, and E. Kolemen, “The DESC
+    stellarator code suite. Part 1: Quick and accurate equilibria
+    computations,” *Journal of Plasma Physics* 89, 955890303 (2023),
+    doi:10.1017/S0022377823000272 — Eqs. (32)–(34b) define the
+    volume-averaged relative force error
+    :math:`\langle|\mathbf F|\rangle / \langle|\nabla p|\rangle` reported
+    beside the pointwise certificate, and its vacuum-safe companion that
+    divides by the volume-averaged magnetic pressure gradient instead.

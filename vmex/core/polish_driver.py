@@ -25,6 +25,7 @@ from .printing import (
     POLISH_SCREEN_HEADER,
     compile_notice,
     emit_flushed,
+    force_error_rows,
     polish_certificate_summary,
     polish_screen_line,
 )
@@ -47,6 +48,7 @@ from .strong_force import (
     StrongForceReport,
     certify_strong_force,
     evaluate_strong_force,
+    force_error_measures,
 )
 
 Array = object
@@ -197,7 +199,18 @@ class PolishConfig:
 
 @dataclass(frozen=True)
 class PolishReport:
-    """Compact machine-readable summary of one correction attempt."""
+    """Compact machine-readable summary of one correction attempt.
+
+    ``initial_normalized_l2`` and ``final_normalized_l2`` are the pointwise
+    ``eps_F`` volume L2, which is the acceptance criterion and is bounded
+    above by 2 by construction; on a low-beta or vacuum state both ends of
+    that pair sit at the ceiling and the pair says nothing.  The
+    ``*_volume_average_force``, ``*_relative_force_error`` and
+    ``*_magnetic_relative_force_error`` fields are the non-saturating
+    companions taken from the certificates' ``window_normalizations`` over
+    ``normalization_window``; quote one of those, not the ``eps_F`` pair,
+    whenever a polish gain is being reported.
+    """
 
     converged: bool
     termination_reason: str
@@ -223,6 +236,44 @@ class PolishReport:
     variable_scale_min: float | None = None
     variable_scale_max: float | None = None
     variable_scale_probes: int = 0
+    initial_volume_average_force: float | None = None
+    final_volume_average_force: float | None = None
+    initial_relative_force_error: float | None = None
+    final_relative_force_error: float | None = None
+    initial_magnetic_relative_force_error: float | None = None
+    final_magnetic_relative_force_error: float | None = None
+    normalization_window: tuple[float, float] | None = None
+
+
+def _normalization_fields(
+    initial: StrongForceReport, final: StrongForceReport | None = None
+) -> dict[str, Any]:
+    """Non-saturating certificate fields for a :class:`PolishReport`.
+
+    ``final`` defaults to ``initial`` so an attempt that never produced a
+    corrected state still reports where it started rather than leaving the
+    fields empty, exactly as the ``eps_F`` pair already does.
+    """
+
+    final = initial if final is None else final
+    window = initial.window_normalizations
+    return {
+        "initial_volume_average_force": float(window.volume_average_force),
+        "final_volume_average_force": float(
+            final.window_normalizations.volume_average_force
+        ),
+        "initial_relative_force_error": float(window.relative_force_error),
+        "final_relative_force_error": float(
+            final.window_normalizations.relative_force_error
+        ),
+        "initial_magnetic_relative_force_error": float(
+            window.magnetic_relative_force_error
+        ),
+        "final_magnetic_relative_force_error": float(
+            final.window_normalizations.magnetic_relative_force_error
+        ),
+        "normalization_window": (float(window.s_min), float(window.s_max)),
+    }
 
 
 class PolishContext(NamedTuple):
@@ -784,6 +835,7 @@ def polish_strong_root(
             minimum_signed_jacobian=float(initial_certificate.minimum_signed_jacobian),
             factor_build_seconds=runtime.low_preconditioner.factor_build_seconds,
             solve_seconds=perf_counter() - started,
+            **_normalization_fields(initial_certificate),
         )
         return PolishResult(runtime.native, initial_certificate, report, full_zero)
     _, _, adaptive_continuation, _, pseudo_transient_continuation = (
@@ -965,6 +1017,7 @@ def polish_strong_root(
             ),
             factor_build_seconds=factor_build_seconds,
             solve_seconds=perf_counter() - started,
+            **_normalization_fields(initial_certificate),
         )
         if config.fail_policy == "raise":
             raise StrongForceContinuationError(
@@ -1001,6 +1054,7 @@ def polish_strong_root(
         minimum_signed_jacobian=float(certificate.minimum_signed_jacobian),
         factor_build_seconds=factor_build_seconds,
         solve_seconds=perf_counter() - started,
+        **_normalization_fields(initial_certificate, certificate),
     )
     if not certified and config.fail_policy == "raise":
         raise StrongForceCertificationError(
@@ -1276,6 +1330,7 @@ def polish_collocation_least_squares(
         variable_scale_min=float(np.min(variable_scale)),
         variable_scale_max=float(np.max(variable_scale)),
         variable_scale_probes=config.collocation_scale_probes,
+        **_normalization_fields(initial_certificate, certificate),
     )
     if verbose:
         emit(polish_certificate_summary(
@@ -1284,7 +1339,9 @@ def polish_collocation_least_squares(
             verdict="CERTIFIED" if converged else "FAILED",
             failed_checks=(
                 () if converged
-                else _failed_certificate_checks(certificate, config))),
+                else _failed_certificate_checks(certificate, config)),
+            measures=force_error_measures(initial_certificate, certificate),
+            window=report.normalization_window),
             end="")
     if converged:
         return PolishResult(
@@ -1386,7 +1443,16 @@ def polish_legacy_solution(
     if verbose:
         emit(" initial certificate: EPS-F = "
              f"{float(initial_certificate.normalized_l2):.3E}"
-             f"  (tolerance {config.certificate_tolerance:.3E})")
+             f"  (tolerance {config.certificate_tolerance:.3E};"
+             " EPS-F is bounded by 2 by construction)")
+        emit("".join(
+            f"{row}\n" for row in force_error_rows(
+                force_error_measures(initial_certificate),
+                window=(
+                    float(initial_certificate.window_normalizations.s_min),
+                    float(initial_certificate.window_normalizations.s_max),
+                ))),
+            end="")
     if float(initial_certificate.normalized_l2) <= config.certificate_tolerance:
         report = PolishReport(
             converged=True,
@@ -1403,12 +1469,15 @@ def polish_legacy_solution(
             minimum_signed_jacobian=float(initial_certificate.minimum_signed_jacobian),
             factor_build_seconds=0.0,
             solve_seconds=perf_counter() - started,
+            **_normalization_fields(initial_certificate),
         )
         if verbose:
             emit(polish_certificate_summary(
                 report.initial_normalized_l2, report.final_normalized_l2,
                 config.certificate_tolerance,
-                verdict="ALREADY CERTIFIED (no correction applied)"), end="")
+                verdict="ALREADY CERTIFIED (no correction applied)",
+                measures=force_error_measures(initial_certificate),
+                window=report.normalization_window), end="")
         return PolishResult(
             certified_native,
             initial_certificate,
