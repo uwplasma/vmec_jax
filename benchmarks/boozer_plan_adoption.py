@@ -19,6 +19,11 @@ This script measures both, in fresh processes:
     code, so the two lanes differ only in the plan.
 ``--mode equivalence``
     Both lanes in one process; reports the per-key difference.
+``--mode interleaved``
+    Both lanes in one process, warm, alternating call by call.  The
+    fresh-process lanes above are the protocol of record, but their wall
+    time is dominated by the solve and the cold compile; a 10-30% warm
+    difference does not survive that, and this lane is where it is legible.
 
 The parent process (the default) runs the children.  Each child gets its own
 empty JAX persistent-compilation-cache directory, so ``cold`` is a real cold
@@ -76,8 +81,9 @@ def _parser() -> argparse.ArgumentParser:
                         help="in-process warm calls timed per lane")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--mode", choices=("plan", "inline", "equivalence"),
-                        default=None, help="child lane (internal)")
+    parser.add_argument(
+        "--mode", choices=("plan", "inline", "equivalence", "interleaved"),
+        default=None, help="child lane (internal)")
     parser.add_argument("--deck", default=None, help="child deck (internal)")
     return parser
 
@@ -199,6 +205,46 @@ def _timed(callable_, argument, *, warm_repeats: int) -> dict[str, float]:
     }
 
 
+def _interleaved(lanes: dict[str, Any], state, *, rounds: int) -> dict[str, Any]:
+    """Warm timings with the two lanes alternating call by call.
+
+    Both lanes are compiled and warmed first, then each round times them in
+    an order that flips every round, so a drifting machine cannot bias one
+    lane.  Only warm figures: the plan build is a once-per-process cost and
+    belongs to the fresh-process lanes, not here.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    timers: dict[str, Any] = {}
+    builders = {
+        "jit_value": lambda call: jax.jit(lambda st: call(st)["bmnc_b"]),
+        "jit_gradient": lambda call: jax.jit(jax.grad(
+            lambda st: jnp.sum(call(st)["bmnc_b"] ** 2))),
+        "eager_value": lambda call: (lambda st: call(st)["bmnc_b"]),
+    }
+    for timer, build in builders.items():
+        compiled = {mode: build(call) for mode, call in lanes.items()}
+        for callable_ in compiled.values():
+            for _ in range(2):
+                jax.block_until_ready(callable_(state))
+        samples: dict[str, list[float]] = {mode: [] for mode in compiled}
+        count = rounds if timer != "eager_value" else max(5, rounds // 2)
+        for round_index in range(count):
+            order = ("inline", "plan") if round_index % 2 == 0 else ("plan", "inline")
+            for mode in order:
+                started = time.perf_counter()
+                jax.block_until_ready(compiled[mode](state))
+                samples[mode].append(time.perf_counter() - started)
+        timers[timer] = {
+            mode: {"warm_median_s": statistics.median(values),
+                   "warm_min_s": min(values),
+                   "calls": len(values)}
+            for mode, values in samples.items()
+        }
+    return timers
+
+
 def _child(arguments: argparse.Namespace) -> dict[str, Any]:
     import jax
     import jax.numpy as jnp
@@ -262,6 +308,18 @@ def _child(arguments: argparse.Namespace) -> dict[str, Any]:
             for key in OUTPUT_KEYS)
         return report
 
+    if arguments.mode == "interleaved":
+        report["timers"] = _interleaved(
+            {mode: _lane(mode, rt, **shared) for mode in ("inline", "plan")},
+            state, rounds=arguments.warm_repeats)
+        report["speedup_inline_over_plan"] = {
+            f"{timer}_{statistic}": (
+                values["inline"][statistic] / values["plan"][statistic])
+            for timer, values in report["timers"].items()
+            for statistic in ("warm_median_s", "warm_min_s")
+        }
+        return report
+
     lane = _lane(arguments.mode, rt, **shared)
     value = jax.jit(lambda st: lane(st)["bmnc_b"])
     gradient = jax.jit(jax.grad(lambda st: jnp.sum(lane(st)["bmnc_b"] ** 2)))
@@ -270,7 +328,7 @@ def _child(arguments: argparse.Namespace) -> dict[str, Any]:
                                     warm_repeats=arguments.warm_repeats)
     report["eager_value"] = _timed(
         lambda st: lane(st)["bmnc_b"], state,
-        warm_repeats=max(3, arguments.warm_repeats // 3))
+        warm_repeats=max(5, arguments.warm_repeats // 2))
     report["digests"] = {key: _digest(lane(state)[key]) for key in OUTPUT_KEYS}
     return report
 
@@ -365,12 +423,13 @@ def main(argv: list[str] | None = None) -> int:
                 runs[mode].append((report, wall))
                 child_versions = report["versions"]
         equivalence, _ = _run_child(arguments, deck=deck, mode="equivalence")
+        interleaved, _ = _run_child(arguments, deck=deck, mode="interleaved")
         summary = {mode: _lane_summary(runs[mode]) for mode in runs}
         speedup = {
             f"{timer}_{statistic}": (
                 summary["inline"][timer][statistic] / summary["plan"][timer][statistic])
             for timer in ("jit_value", "jit_gradient", "eager_value")
-            for statistic in ("cold_s", "warm_median_s")
+            for statistic in ("cold_s", "warm_median_s", "warm_min_s")
         }
         speedup["subprocess_wall"] = (
             summary["inline"]["subprocess_wall_s"] / summary["plan"]["subprocess_wall_s"])
@@ -378,8 +437,12 @@ def main(argv: list[str] | None = None) -> int:
             "deck": deck,
             "sha256_prefix": _sha256_prefix(DATA / deck),
             "resolution": runs["plan"][0][0]["resolution"],
-            "lanes": summary,
+            "fresh_process": summary,
             "speedup_inline_over_plan": speedup,
+            "interleaved": {
+                "timers": interleaved["timers"],
+                "speedup_inline_over_plan": interleaved["speedup_inline_over_plan"],
+            },
             "equivalence": {
                 "bit_identical": equivalence["bit_identical"],
                 "digests": equivalence["digests"],
@@ -408,7 +471,11 @@ def main(argv: list[str] | None = None) -> int:
                 "best over repetitions, the noise floor being one-sided upward.  "
                 "inline is the pre-adoption call reconstructed verbatim from "
                 "vmex/core/omnigenity.py at commit 2d3be2c0; plan is the shipped "
-                "boozer_spectrum_state."),
+                "boozer_spectrum_state.  The fresh_process block is the protocol "
+                "of record; its subprocess wall is dominated by the solve and the "
+                "cold compile, so the interleaved block repeats the warm "
+                "comparison with the two lanes alternating call by call in one "
+                "process, which is where a 10-30% difference is legible."),
             "input_data_embedded": False,
             **git_state(REPO),
         },

@@ -1,0 +1,419 @@
+{
+  "configuration": {
+    "mboz": 16,
+    "nboz": 16,
+    "oversample": 2,
+    "repeats": 2,
+    "surfaces": [
+      0.15,
+      0.2571428571428571,
+      0.36428571428571427,
+      0.4714285714285714,
+      0.5785714285714285,
+      0.6857142857142857,
+      0.7928571428571429,
+      0.9
+    ],
+    "warm_repeats": 9
+  },
+  "decks": [
+    {
+      "deck": "input.li383_low_res",
+      "equivalence": {
+        "bit_identical": true,
+        "differences": {
+          "G_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "I_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "bmnc_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "bmns_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "iota_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "xm_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "xn_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          }
+        },
+        "digests": {
+          "inline": {
+            "G_b": "0cbf3cfdcc693e98",
+            "I_b": "dfc9f833d3a7d808",
+            "bmnc_b": "74e0ea62a2a56af9",
+            "bmns_b": "c35020473aed1b46",
+            "iota_b": "b53bff63da0fb391",
+            "xm_b": "a83a5fd757cd8c2b",
+            "xn_b": "26c3c218f9746389"
+          },
+          "plan": {
+            "G_b": "0cbf3cfdcc693e98",
+            "I_b": "dfc9f833d3a7d808",
+            "bmnc_b": "74e0ea62a2a56af9",
+            "bmns_b": "c35020473aed1b46",
+            "iota_b": "b53bff63da0fb391",
+            "xm_b": "a83a5fd757cd8c2b",
+            "xn_b": "26c3c218f9746389"
+          }
+        }
+      },
+      "lanes": {
+        "inline": {
+          "eager_value": {
+            "cold_s": 6.097735832998296,
+            "warm_median_s": 0.249378209002316,
+            "warm_min_s": 0.24818416600464843
+          },
+          "jit_gradient": {
+            "cold_s": 4.728740417020163,
+            "warm_median_s": 0.05742129197460599,
+            "warm_min_s": 0.05153441699803807
+          },
+          "jit_value": {
+            "cold_s": 1.6768382500158623,
+            "warm_median_s": 0.017389124986948445,
+            "warm_min_s": 0.01659329200629145
+          },
+          "repetitions": [
+            {
+              "eager_value": {
+                "cold_s": 7.794760457996745,
+                "warm_median_s": 0.249378209002316,
+                "warm_min_s": 0.24818416600464843
+              },
+              "jit_gradient": {
+                "cold_s": 8.101153958006762,
+                "warm_median_s": 0.0907274579803925,
+                "warm_min_s": 0.05966374999843538
+              },
+              "jit_value": {
+                "cold_s": 2.810215875011636,
+                "warm_median_s": 0.038983625010587275,
+                "warm_min_s": 0.025673124997410923
+              },
+              "subprocess_wall_s": 30.357545292004943
+            },
+            {
+              "eager_value": {
+                "cold_s": 6.097735832998296,
+                "warm_median_s": 0.2908653329941444,
+                "warm_min_s": 0.24972637501196004
+              },
+              "jit_gradient": {
+                "cold_s": 4.728740417020163,
+                "warm_median_s": 0.05742129197460599,
+                "warm_min_s": 0.05153441699803807
+              },
+              "jit_value": {
+                "cold_s": 1.6768382500158623,
+                "warm_median_s": 0.017389124986948445,
+                "warm_min_s": 0.01659329200629145
+              },
+              "subprocess_wall_s": 21.15322362500592
+            }
+          ],
+          "solve_s": 3.98554345901357,
+          "subprocess_wall_s": 21.15322362500592
+        },
+        "plan": {
+          "eager_value": {
+            "cold_s": 5.370873791980557,
+            "warm_median_s": 0.22787637502187863,
+            "warm_min_s": 0.2257164579932578
+          },
+          "jit_gradient": {
+            "cold_s": 4.650310666998848,
+            "warm_median_s": 0.044456417002948,
+            "warm_min_s": 0.04320558300241828
+          },
+          "jit_value": {
+            "cold_s": 2.463613540981896,
+            "warm_median_s": 0.013271749980049208,
+            "warm_min_s": 0.0131239999900572
+          },
+          "repetitions": [
+            {
+              "eager_value": {
+                "cold_s": 11.578703833016334,
+                "warm_median_s": 0.23932375002186745,
+                "warm_min_s": 0.23768816600204445
+              },
+              "jit_gradient": {
+                "cold_s": 5.979704750003293,
+                "warm_median_s": 0.04847754200454801,
+                "warm_min_s": 0.04391183299594559
+              },
+              "jit_value": {
+                "cold_s": 2.463613540981896,
+                "warm_median_s": 0.021978665987262502,
+                "warm_min_s": 0.014780917001189664
+              },
+              "subprocess_wall_s": 28.479169084021123
+            },
+            {
+              "eager_value": {
+                "cold_s": 5.370873791980557,
+                "warm_median_s": 0.22787637502187863,
+                "warm_min_s": 0.2257164579932578
+              },
+              "jit_gradient": {
+                "cold_s": 4.650310666998848,
+                "warm_median_s": 0.044456417002948,
+                "warm_min_s": 0.04320558300241828
+              },
+              "jit_value": {
+                "cold_s": 2.501703040994471,
+                "warm_median_s": 0.013271749980049208,
+                "warm_min_s": 0.0131239999900572
+              },
+              "subprocess_wall_s": 19.97531804200844
+            }
+          ],
+          "solve_s": 3.5427395419974346,
+          "subprocess_wall_s": 19.97531804200844
+        }
+      },
+      "resolution": {
+        "lasym": false,
+        "mpol": 4,
+        "nfp": 3,
+        "ns": 16,
+        "ntor": 3
+      },
+      "sha256_prefix": "adcea5bf869c4112",
+      "speedup_inline_over_plan": {
+        "eager_value_cold_s": 1.1353340385884776,
+        "eager_value_warm_median_s": 1.0943574513960606,
+        "jit_gradient_cold_s": 1.0168654861228723,
+        "jit_gradient_warm_median_s": 1.291631126521021,
+        "jit_value_cold_s": 0.6806417573705748,
+        "jit_value_warm_median_s": 1.3102360286389279,
+        "subprocess_wall": 1.0589680514983704
+      }
+    },
+    {
+      "deck": "input.nfp1_QI",
+      "equivalence": {
+        "bit_identical": true,
+        "differences": {
+          "G_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "I_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "bmnc_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "bmns_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "iota_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "xm_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          },
+          "xn_b": {
+            "max_abs": 0.0,
+            "max_abs_over_max_abs_value": 0.0
+          }
+        },
+        "digests": {
+          "inline": {
+            "G_b": "15749a5fa45e137b",
+            "I_b": "f2804b21e32f2ca7",
+            "bmnc_b": "b9c2de34e46e2a9f",
+            "bmns_b": "c35020473aed1b46",
+            "iota_b": "cea6de8786354025",
+            "xm_b": "a83a5fd757cd8c2b",
+            "xn_b": "2a571ef7a19230ed"
+          },
+          "plan": {
+            "G_b": "15749a5fa45e137b",
+            "I_b": "f2804b21e32f2ca7",
+            "bmnc_b": "b9c2de34e46e2a9f",
+            "bmns_b": "c35020473aed1b46",
+            "iota_b": "cea6de8786354025",
+            "xm_b": "a83a5fd757cd8c2b",
+            "xn_b": "2a571ef7a19230ed"
+          }
+        }
+      },
+      "lanes": {
+        "inline": {
+          "eager_value": {
+            "cold_s": 5.994733458996052,
+            "warm_median_s": 0.2736107079836074,
+            "warm_min_s": 0.2711699170176871
+          },
+          "jit_gradient": {
+            "cold_s": 5.4665774579916615,
+            "warm_median_s": 0.0622395419923123,
+            "warm_min_s": 0.059697290998883545
+          },
+          "jit_value": {
+            "cold_s": 1.6701931250281632,
+            "warm_median_s": 0.023451625020243227,
+            "warm_min_s": 0.021994209004333243
+          },
+          "repetitions": [
+            {
+              "eager_value": {
+                "cold_s": 5.994733458996052,
+                "warm_median_s": 0.2736107079836074,
+                "warm_min_s": 0.2711699170176871
+              },
+              "jit_gradient": {
+                "cold_s": 5.4665774579916615,
+                "warm_median_s": 0.0622395419923123,
+                "warm_min_s": 0.059697290998883545
+              },
+              "jit_value": {
+                "cold_s": 1.6701931250281632,
+                "warm_median_s": 0.023451625020243227,
+                "warm_min_s": 0.021994209004333243
+              },
+              "subprocess_wall_s": 30.706588207976893
+            },
+            {
+              "eager_value": {
+                "cold_s": 7.066973459004657,
+                "warm_median_s": 0.2898408750188537,
+                "warm_min_s": 0.28596179198939353
+              },
+              "jit_gradient": {
+                "cold_s": 5.58845779200783,
+                "warm_median_s": 0.11748333301511593,
+                "warm_min_s": 0.07149450000724755
+              },
+              "jit_value": {
+                "cold_s": 2.119135917018866,
+                "warm_median_s": 0.037544583989074454,
+                "warm_min_s": 0.025782540993532166
+              },
+              "subprocess_wall_s": 37.02678537499742
+            }
+          ],
+          "solve_s": 12.722256000008201,
+          "subprocess_wall_s": 30.706588207976893
+        },
+        "plan": {
+          "eager_value": {
+            "cold_s": 6.643978334002895,
+            "warm_median_s": 0.26715412500198,
+            "warm_min_s": 0.26057570899138227
+          },
+          "jit_gradient": {
+            "cold_s": 5.415897792001488,
+            "warm_median_s": 0.08680220899987034,
+            "warm_min_s": 0.06018245901213959
+          },
+          "jit_value": {
+            "cold_s": 2.6349128330184612,
+            "warm_median_s": 0.013941665994934738,
+            "warm_min_s": 0.013783874979708344
+          },
+          "repetitions": [
+            {
+              "eager_value": {
+                "cold_s": 6.643978334002895,
+                "warm_median_s": 0.26715412500198,
+                "warm_min_s": 0.26057570899138227
+              },
+              "jit_gradient": {
+                "cold_s": 5.415897792001488,
+                "warm_median_s": 0.08680220899987034,
+                "warm_min_s": 0.06018245901213959
+              },
+              "jit_value": {
+                "cold_s": 2.6349128330184612,
+                "warm_median_s": 0.013941665994934738,
+                "warm_min_s": 0.013783874979708344
+              },
+              "subprocess_wall_s": 30.96908141701715
+            },
+            {
+              "eager_value": {
+                "cold_s": 8.190644833026454,
+                "warm_median_s": 0.3032995829998981,
+                "warm_min_s": 0.3005677920009475
+              },
+              "jit_gradient": {
+                "cold_s": 6.213393542013364,
+                "warm_median_s": 0.10340141601045616,
+                "warm_min_s": 0.08206041698576882
+              },
+              "jit_value": {
+                "cold_s": 3.102144500007853,
+                "warm_median_s": 0.03380416700383648,
+                "warm_min_s": 0.01992566598346457
+              },
+              "subprocess_wall_s": 40.79452008299995
+            }
+          ],
+          "solve_s": 11.434965499996906,
+          "subprocess_wall_s": 30.96908141701715
+        }
+      },
+      "resolution": {
+        "lasym": false,
+        "mpol": 6,
+        "nfp": 1,
+        "ns": 31,
+        "ntor": 6
+      },
+      "sha256_prefix": "60d7b1e3b37f4fa0",
+      "speedup_inline_over_plan": {
+        "eager_value_cold_s": 0.902280705570019,
+        "eager_value_warm_median_s": 1.0241680078178825,
+        "jit_gradient_cold_s": 1.009357574300058,
+        "jit_gradient_warm_median_s": 0.7170271668132923,
+        "jit_value_cold_s": 0.6338703520278696,
+        "jit_value_warm_median_s": 1.682125007783405,
+        "subprocess_wall": 0.9915240234120725
+      }
+    }
+  ],
+  "provenance": {
+    "command": "python benchmarks/boozer_plan_adoption.py --decks input.li383_low_res input.nfp1_QI",
+    "created_utc": "2026-09-03T12:40:25Z",
+    "date": "2026-09-03",
+    "float64": true,
+    "host": "Darwin 23.4.0 (arm64), CPU",
+    "input_data_embedded": false,
+    "measurement_commit": "a2008edf600337f0de243a74707e0fd78b882956",
+    "measurement_dirty": false,
+    "protocol": "One lane at a time, foreground, one fresh process per lane per repetition, each with its own empty JAX persistent-compilation-cache directory (the caller's cache is never read or written).  Lanes alternate inline, plan, inline, plan so machine drift hits both.  cold_s is the first jitted call (trace + compile + execute); warm statistics follow one untimed repeat.  Reported figures are the best over repetitions, the noise floor being one-sided upward.  inline is the pre-adoption call reconstructed verbatim from vmex/core/omnigenity.py at commit 2d3be2c0; plan is the shipped boozer_spectrum_state.",
+    "versions": {
+      "booz_xform_jax": "0.2.0",
+      "jax": "0.11.1",
+      "jaxlib": "0.11.1",
+      "numpy": "2.5.2",
+      "python": "3.12.9",
+      "vmex": "0.8.1"
+    }
+  },
+  "schema": "vmex.boozer-plan-adoption/1"
+}
