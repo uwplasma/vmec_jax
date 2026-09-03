@@ -106,7 +106,8 @@ def test_quoted_exclamation_marks_do_not_become_directives():
 
 def test_directive_round_trip_through_format():
     options = RunOptions(polish="auto", polish_tol=1e-8, polish_fail="warn",
-                         polish_degree=7, polish_max_iter=40, polish_spans=16)
+                         polish_degree=7, polish_max_iter=40, polish_spans=16,
+                         polish_budget=1800.0)
     text = format_indata_directives(options) + "&INDATA\nMPOL = 3\n/\n"
     assert parse_indata_run_options(text) == options
     assert format_indata_directives(RunOptions()) == ""
