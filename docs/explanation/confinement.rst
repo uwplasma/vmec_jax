@@ -465,7 +465,9 @@ Assuming the ideal prerequisite :math:`D_{\rm Merc}>0`, the
 Glasser--Greene--Johnson necessary condition for local resistive interchange
 stability is :math:`D_R \leq 0`.  In the VMEC Mercier normalization, with
 :math:`S=d\iota/d\Phi` and
-:math:`D_{\rm shear}=S^2/4`, Landreman--Jorge's relation is
+:math:`D_{\rm shear}=S^2/4`, the Landreman--Jorge relation (J. Plasma
+Phys. 86, 905860510 (2020), eq. (5.6); :math:`D_R` and :math:`H` are
+their eqs. (5.1) and (5.4)) is
 
 .. math::
 
