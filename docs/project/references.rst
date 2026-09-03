@@ -37,7 +37,7 @@ Background and canonical references for VMEC and related equilibrium methods:
 
 10. A. H. Glasser, J. M. Greene, and J. L. Johnson, “Resistive instabilities
     in general toroidal plasma configurations,” *Physics of Fluids* 18(7),
-    875-888 (1975).
+    875-888 (1975), doi:10.1063/1.861224.
 
 11. M. Landreman and R. Jorge, “Magnetic well and Mercier stability of
     stellarators near the magnetic axis,” *Journal of Plasma Physics* 86(5),
@@ -69,111 +69,157 @@ Background and canonical references for VMEC and related equilibrium methods:
     NeurIPS 2022 (jaxopt) — the implicit-function-theorem ``custom_vjp``
     formulation used for equilibrium gradients.
 
+19. A. H. Boozer, “Plasma equilibrium with rational magnetic surfaces,”
+    *Physics of Fluids* 24, 1999 (1981), doi:10.1063/1.863297 — the Boozer
+    coordinates in which quasisymmetry and the fast-ion proxies are stated.
+
+20. R. Sanchez et al., “Ballooning stability optimization of low-aspect-ratio
+    stellarators,” *Plasma Physics and Controlled Fusion* 42, 641 (2000),
+    doi:10.1088/0741-3335/42/6/303 — the ballooning-optimization companion to
+    the COBRA formulation used by :mod:`vmex.core.stability`.
+
 Confinement objectives and optimization:
 
-19. M. Landreman and E. Paul, “Magnetic fields with precise quasisymmetry for
+21. M. Landreman and E. Paul, “Magnetic fields with precise quasisymmetry for
     plasma confinement,” *Physical Review Letters* 128, 035001 (2022),
-    arXiv:2108.03711 — the two-term quasisymmetry ratio residual and the
+    arXiv:2108.03711, doi:10.1103/PhysRevLett.128.035001 — the two-term
+    quasisymmetry ratio residual (the residual inside eq. 1) and the
     precise-QA/QH configurations (:doc:`/explanation/confinement`).
 
-20. A. Goodman et al., “Constructing precisely quasi-isodynamic magnetic
+22. A. Goodman et al., “Constructing precisely quasi-isodynamic magnetic
     fields,” *Journal of Plasma Physics* 89(5), 905890504 (2023),
     arXiv:2211.09829 — the constructed-QI target implemented by
     :class:`~vmex.core.qi.ConstructedQIResidual`; the lightweight
     :class:`~vmex.core.omnigenity.QIResidual` is a level-set surrogate.
 
-21. J. R. Cary and S. G. Shasharina, “Omnigenity and quasihelicity in helical
+23. J. R. Cary and S. G. Shasharina, “Omnigenity and quasihelicity in helical
     plasma confinement systems,” *Physics of Plasmas* 4, 3323 (1997) — the
     bounce-integral formulation of omnigenity.
 
-22. D. Dudt et al., “Magnetic fields with general omnigenity,” *Journal of
+24. D. Dudt et al., “Magnetic fields with general omnigenity,” *Journal of
     Plasma Physics* 90(1), 905900120 (2024), arXiv:2305.08026 — omnigenity
     optimization in a differentiable (DESC) framework.
 
-23. A. Redl et al., “A new set of analytical formulae for the computation of
-    the bootstrap current and the neoclassical conductivity in tokamaks,”
-    *Physics of Plasmas* 28, 022502 (2021) — the Redl bootstrap closure.
+25. A. Redl, C. Angioni, E. Belli, and O. Sauter, “A new set of analytical
+    formulae for the computation of the bootstrap current and the neoclassical
+    conductivity in tokamaks,” *Physics of Plasmas* 28, 022502 (2021),
+    doi:10.1063/5.0012664 — the Redl bootstrap closure (eqs. 10-16, 19-21).
 
-24. M. Landreman, S. Buller, and M. Drevlak, “Optimization of quasi-symmetric
+26. M. Landreman, S. Buller, and M. Drevlak, “Optimization of quasi-symmetric
     stellarators with self-consistent bootstrap current and energetic particle
-    confinement,” *Physics of Plasmas* 29, 082501 (2022), arXiv:2205.02914 —
+    confinement,” *Physics of Plasmas* 29, 082501 (2022), arXiv:2205.02914,
+    doi:10.1063/5.0098166 —
     the self-consistent bootstrap iteration reproduced in
     ``benchmarks/*_bootstrap_selfconsistent.py``; the compact finite-beta
     optimization workflows are ``examples/optimization/*_optimization_bootstrap.py``.
 
-25. R. Jorge, A. Goodman, M. Landreman, J. Rodrigues, and F. Wechsung,
+27. R. Jorge, A. Goodman, M. Landreman, J. Rodrigues, and F. Wechsung,
     “Single-stage stellarator optimization: combining coils with fixed
     boundary equilibria,” *Plasma Physics and Controlled Fusion* 65, 074003
     (2023), arXiv:2302.10622 — the combined plasma–coil objective
     ``J = J_plasma + w_coils J_coils`` and the two-stage vs single-stage
     comparison protocol used by the single-stage examples.
 
-26. R. Jorge, A. Giuliani, and J. Loizu, “Simplified and flexible coils for
+28. R. Jorge, A. Giuliani, and J. Loizu, “Simplified and flexible coils for
     stellarators using single-stage optimization,” arXiv:2406.07830 (2024) —
     cold-start single-stage optimization with staged Fourier-mode release.
 
-27. F. Wechsung et al., “Precise stellarator quasi-symmetry can be achieved
+29. F. Wechsung et al., “Precise stellarator quasi-symmetry can be achieved
     with electromagnetic coils,” *PNAS* 119(13), e2202084119 (2022) — coil
     regularization set (length, curvature, coil–coil distance) and the
     normalized ``max |B·n|/|B|`` reporting convention.
 
-28. K. Unalmis et al., “Spectrally accurate, reverse-mode differentiable
+30. K. Unalmis et al., “Spectrally accurate, reverse-mode differentiable
     bounce-averaging algorithm and its applications,” *Journal of Plasma
     Physics* (2026), doi:10.1017/S0022377826101652 — endpoint-regularized
     quadrature and the independent DESC oracle for
     :mod:`vmex.core.bounce`.
 
-29. E. Rodríguez, P. Helander, and A. G. Goodman, “The maximum-J property
+31. E. Rodríguez, P. Helander, and A. G. Goodman, “The maximum-J property
     in quasi-isodynamic stellarators,” *Journal of Plasma Physics* 90,
     905900212 (2024), doi:10.1017/S0022377824000345 — the signed
     outward :math:`\partial\mathcal J_\parallel/\partial s<0` condition implemented
     by :class:`~vmex.core.maxj.MaximumJResidual`.
 
-30. E. Rodríguez and G. G. Plunk, “Near-axis quasi-isodynamic database,”
+32. E. Rodríguez and G. G. Plunk, “Near-axis quasi-isodynamic database,”
     *Journal of Plasma Physics* (2026),
     doi:10.1017/S0022377826101688 — defines the bounce-time-weighted
     Maxwellian maximum-J fraction :math:`f_J`, which is distinct from a
     uniform resolved-orbit count.
 
-31. D. A. Spong and J. H. Harris, “New QP/QI symmetric stellarator
+33. D. A. Spong and J. H. Harris, “New QP/QI symmetric stellarator
     configurations,” *Plasma and Fusion Research* 5, S2039 (2010),
     doi:10.1585/pfr.5.S2039 — motivates quasi-poloidal symmetry as a practical
     precursor to poloidally closed-contour quasi-isodynamic configurations.
 
-32. R. Conlin, P. Kim, D. W. Dudt, D. Panici, and E. Kolemen, “Stellarator
+34. R. Conlin, P. Kim, D. W. Dudt, D. Panici, and E. Kolemen, “Stellarator
     Optimization with Constraints,” *Journal of Plasma Physics* 90,
     905900501 (2024), arXiv:2403.11033 — hard shaping constraints and
     augmented-Lagrangian methods for stellarator design.
 
-33. B. Jang, R. Conlin, and M. Landreman, “Exponential Spectral Scaling:
+35. B. Jang, R. Conlin, and M. Landreman, “Exponential Spectral Scaling:
     Robust and Efficient Stellarator Boundary Optimization via Mode-Dependent
     Scaling,” arXiv:2509.16320 (2025) — the direct full-spectrum variable
     scaling exposed by ``use_ess=True``.
 
-34. D. Panici, B. Jang, R. Conlin, D. Dudt, Y. G. Elmacioglu, and E. Kolemen,
+36. D. Panici, B. Jang, R. Conlin, D. Dudt, Y. G. Elmacioglu, and E. Kolemen,
     “Deflation Techniques for Stellarator Equilibrium and Optimization,”
     arXiv:2602.09957 (2026) — a systematic route to distinct minima when a
     single deterministic continuation path is insufficient.
 
-35. H. Chen *et al.*, “Direct Optimization of Stellarator Omnigenity from the
+37. H. Chen *et al.*, “Direct Optimization of Stellarator Omnigenity from the
     Second Adiabatic Invariant,” arXiv:2608.02418 (2026) — recent direct
     bounce-action optimization complementary to constructed geometric QI
     targets.
 
-36. V. V. Nemov, S. V. Kasilov, W. Kernbichler, and M. F. Heyn,
+38. V. V. Nemov, S. V. Kasilov, W. Kernbichler, and M. F. Heyn,
     “Evaluation of :math:`1/\nu` neoclassical transport in stellarators,”
     *Physics of Plasmas* 6, 4622–4632 (1999), doi:10.1063/1.873749 — defines
     the effective-ripple transport measure reported by NEO as
     :math:`\epsilon_{\mathrm{eff}}^{3/2}`.
 
+39. V. V. Nemov et al., “Poloidal motion of trapped particle orbits in
+    real-space coordinates,” *Physics of Plasmas* 15, 052501 (2008),
+    doi:10.1063/1.2912456 — defines the :math:`\Gamma_c` fast-ion proxy
+    (eq. 61) evaluated by :class:`~vmex.core.gammac.GammaC`.
+
+40. J. L. Velasco et al. and the W7-X Team, “A model for the fast evaluation
+    of prompt losses of energetic ions in stellarators,” *Nuclear Fusion* 61,
+    116059 (2021), doi:10.1088/1741-4326/ac2994 — the :math:`\Gamma_c`
+    organization used here (eq. 16) and the approximately linear prompt-loss
+    relation of eqs. 20-21.
+
+41. P. Helander, *Reports on Progress in Physics* 77, 087001 (2014),
+    doi:10.1088/0034-4885/77/8/087001 — the review behind the statement that
+    the two-term residual vanishes exactly for a quasisymmetric :math:`|B|`.
+
+42. O. Sauter, C. Angioni, and Y. R. Lin-Liu, *Physics of Plasmas* 6, 2834
+    (1999), doi:10.1063/1.873240 (erratum *Physics of Plasmas* 9, 5140
+    (2002), doi:10.1063/1.1517052) — the collisionality formulas (eqs.
+    18b-18e) that the Redl closure reuses in :mod:`vmex.core.bootstrap`.
+
+43. Y. R. Lin-Liu and R. L. Miller, *Physics of Plasmas* 2, 1666 (1995),
+    doi:10.1063/1.871315 — the trapped-fraction groundwork underlying the
+    Sauter and Redl fits.
+
+44. A. Bader et al., “Stellarator equilibria with reactor relevant energetic
+    particle losses,” *Journal of Plasma Physics* 85, 905850508 (2019),
+    doi:10.1017/S0022377819000680 — energetic-particle losses measured
+    against proxy values.
+
+45. A. Bader et al., “Modeling of energetic particle transport in optimized
+    stellarators,” *Nuclear Fusion* 61, 116060 (2021),
+    doi:10.1088/1741-4326/ac2991 — documents the imperfect correlation
+    between :math:`\Gamma_c` and simulated energetic-particle losses.
+
 Numerical implementation:
 
-37. JAX documentation, “The Autodiff Cookbook” — the wide-Jacobian cost model
+46. JAX documentation, “The Autodiff Cookbook” — the wide-Jacobian cost model
     (``jacfwd`` versus ``jacrev``) used to select ``jacrev`` for the local
     three-surface raw-force blocks,
     https://docs.jax.dev/en/latest/notebooks/autodiff_cookbook.html.
 
-38. X. S. Li, “An Overview of SuperLU: Algorithms, Implementation, and User
+47. X. S. Li, “An Overview of SuperLU: Algorithms, Implementation, and User
     Interface,” *ACM Transactions on Mathematical Software* 31, 302–325
     (2005) — globally pivoted sparse factorization used for the equilibrated
     block-banded radial solve, doi:10.1145/1089014.1089017.
