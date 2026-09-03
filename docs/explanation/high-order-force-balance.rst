@@ -253,11 +253,13 @@ the complete preconditioner duality.
 residual ``||A P r-r||/||r||`` on fixed probes; it is a library diagnostic and
 the shipped lane does not call it.
 
-The block factors themselves are **not** applied by the collocation lane: it
-calls SOLVAX with no preconditioner.  They are still built, and their build
-time is reported as ``factor_build_seconds`` in every polish report.  The
-factors are used by the retired square root described below and by the
-preconditioner tests and benchmarks.
+The block factors are **not** applied inside the Gauss-Newton solve: the lane
+calls SOLVAX with no preconditioner, so its conjugate-gradient step runs
+unpreconditioned.  They are applied once during the runtime build, where a
+power iteration on the low-order-solved tangent sets the equation and
+coordinate scales, and their build time is reported as
+``factor_build_seconds`` in every polish report.  The retired square root
+below, and the preconditioner tests and benchmarks, apply them directly.
 
 Driver sequence
 ---------------
