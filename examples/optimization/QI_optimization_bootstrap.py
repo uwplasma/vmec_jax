@@ -124,7 +124,7 @@ report = opt.EquilibriumReporter(
     ("beta", opt.volume_average_beta, ".3%"), ("aspect", opt.aspect_ratio, ".3f"),
     ("min |iota|", opt.min_abs_iota, ".3f"), ("mirror", opt.mirror_ratio, ".3f"),
     ("min DMerc", minimum_dmerc, ".2e"), ("max DR", maximum_dr, ".2e"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 report("self-consistent seed", equilibrium)
 # If a RuntimeWarning reports uncertified Jacobian columns, it is expected

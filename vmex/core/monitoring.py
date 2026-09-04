@@ -172,12 +172,15 @@ class OptimizationRecord:
 
 
 class OptimizationMonitor:
-    """Record and optionally print accepted optimizer iterations.
+    """Record and optionally print optimizer iterations and trials.
 
     Pass the instance as a SciPy ``callback``.  SciPy invokes callbacks after
     an iteration, unlike objective functions which are also called for rejected
     line-search or trust-region trials.  JAXopt, Optax, and custom loops can
-    call :meth:`record` with values they already computed.
+    call :meth:`record` with values they already computed.  ``trace`` also
+    prints one ``trial`` line per objective evaluation, so the rejected
+    line-search trials between two accepted iterations -- a full equilibrium
+    solve each -- are visible while the run is in progress.
 
     The monitor never chooses steps or changes an optimizer.  If ``problem``
     is supplied, VMEX solve/failure counters are read without evaluating the
@@ -210,10 +213,13 @@ class OptimizationMonitor:
         *,
         stream: TextIO | None | object = _DEFAULT_STREAM,
         print_every: int = 1,
+        trace: bool = True,
     ) -> None:
         if print_every < 1:
             raise ValueError("print_every must be at least 1")
         self.problem = problem
+        self.trace = bool(trace)
+        self._trials = 0
         self.stream: TextIO | None = (
             sys.stdout if stream is _DEFAULT_STREAM else cast(TextIO | None, stream)
         )
@@ -307,12 +313,18 @@ class OptimizationMonitor:
         term_values = ({} if terms is None else
                        {str(name): float(value) for name, value in terms.items()})
         key = self._key(x)
-        self._evaluations[key] = (
-            cost_f, float(np.linalg.norm(gradient_np)), term_values)
+        optimality = float(np.linalg.norm(gradient_np))
+        self._evaluations[key] = (cost_f, optimality, term_values)
         if not self.records:
-            self.record(
-                x, cost=cost_f, optimality=self._evaluations[key][1],
-                terms=term_values)
+            self.record(x, cost=cost_f, optimality=optimality, terms=term_values)
+        elif self.stream is not None and self.trace:
+            # One line per objective evaluation.  SciPy calls the objective for
+            # rejected line-search trials too, and each of those is a full
+            # equilibrium solve, so printing only accepted iterations leaves a
+            # long-running optimization silent.
+            self._trials += 1
+            print(f"  trial {self._trials:4d}  {cost_f:12.6e}  "
+                  f"{optimality:11.5e}", file=self.stream, flush=True)
         return cost_f, gradient_np
 
     @staticmethod

@@ -72,6 +72,21 @@ def test_free_boundary_config_validates_adjoint_solver():
         make_free_boundary_config(inp, field, adjoint_solver="dense")
 
 
+def test_free_boundary_config_validates_adjoint_fail():
+    """The adjoint failure policy is opt-in and defaults to raising.
+
+    ``best_effort`` returns a stalled Krylov solution so that one bad trial
+    in an optimization is a poor search direction rather than a dead run; a
+    typo must not silently select it.
+    """
+    inp, field = lasym_free_input(DATA), lasym_free_field()
+    assert make_free_boundary_config(inp, field).adjoint_fail == "error"
+    assert make_free_boundary_config(
+        inp, field, adjoint_fail="best_effort").adjoint_fail == "best_effort"
+    with pytest.raises(ValueError, match="'error' or 'best_effort'"):
+        make_free_boundary_config(inp, field, adjoint_fail="warn")
+
+
 def test_free_boundary_warm_failure_retries_once_from_cold(monkeypatch):
     """A bad cached state is discarded, but implementation errors are not."""
     inp = dataclasses.replace(

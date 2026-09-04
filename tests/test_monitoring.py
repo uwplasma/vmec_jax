@@ -444,3 +444,26 @@ def test_compatibility_least_squares_failure_is_silent_and_counted(monkeypatch) 
         jac=None,
     )
     assert result.failed_trials == 1
+
+
+def test_trace_prints_one_line_per_evaluation():
+    """Rejected trials are visible; ``trace=False`` restores the old silence.
+
+    SciPy calls the objective for line-search trials it then rejects, and each
+    of those is a full equilibrium solve, so a monitor that prints only
+    accepted iterations leaves a long run with no output at all.
+    """
+    stream = io.StringIO()
+    monitor = OptimizationMonitor(stream=stream)
+    for index, cost in enumerate((10.0, 8.0, 9.5)):
+        monitor.cache_evaluation(np.array([float(index)]), cost, np.array([cost]))
+    text = stream.getvalue()
+    assert text.count("trial") == 2, text
+    assert "8.000000e+00" in text
+
+    quiet = io.StringIO()
+    silent = OptimizationMonitor(stream=quiet, trace=False)
+    for index, cost in enumerate((10.0, 8.0, 9.5)):
+        silent.cache_evaluation(np.array([float(index)]), cost, np.array([cost]))
+    assert "trial" not in quiet.getvalue()
+

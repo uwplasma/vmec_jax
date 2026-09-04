@@ -31,10 +31,10 @@ except ImportError as error:
 
 TARGET_BETA = 0.025
 SURFACES = np.linspace(0.1, 0.9, 8)
-NS, MPOL, NTOR, NITER, FTOL = 31, 5, 5, 5000, 1.0e-10
+NS, MPOL, NTOR, NITER, FTOL = 31, 5, 5, 2500, 1.0e-9
 MAXITER, METHOD, PARAMETER_BOUND = 20, "L-BFGS-B", 1.0
 ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
-LENGTH_TARGET, LENGTH_WEIGHT = 3.5, 1.0
+LENGTH_LIMIT, LENGTH_WEIGHT = 5.3, 1.0
 CURVATURE_LIMIT, CURVATURE_WEIGHT = 7.0, 10.0
 COIL_DISTANCE_LIMIT, COIL_DISTANCE_WEIGHT = 0.08, 1.0e3
 OPTIONS = {"maxiter": MAXITER, "maxls": 10, "ftol": 1.0e-12, "gtol": 1.0e-8}
@@ -76,7 +76,8 @@ def field_from_u(u):
 params = im.params_from_input(inp)
 config = vj.make_free_boundary_config(
     inp, BiotSavart(coils0), ns=NS, ftol=FTOL, max_iterations=NITER,
-    adjoint_tol=1.0e-8, field_from_parameters=field_from_u)
+    adjoint_tol=1.0e-8, adjoint_solver="boundary_schur",
+    adjoint_fail="best_effort", field_from_parameters=field_from_u)
 solver_context = im.runtime_from_params(params, config.implicit)
 
 # ne=n0(1-s^5), Te=Ti=T0(1-s); rescale n0*T0 to the peak pressure in AM.
@@ -91,7 +92,8 @@ profiles = KineticProfiles(n0 * np.array([1, 0, 0, 0, 0, -1]),
 # opt.soft_min_abs_iota is the smooth-minimum variant.
 def iota_floor(equilibrium_state, solver_context):
     return jnp.maximum(
-        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+        IOTA_FLOOR - opt.soft_min_abs_iota(
+            equilibrium_state, solver_context), 0.0)
 
 
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
@@ -108,7 +110,8 @@ def objective(u):
         residual = opt.residuals_from_tuples(equilibrium_state, solver_context, tuples)
         coils = coils_from_u(u)
         costs = jnp.asarray([
-            0.5 * LENGTH_WEIGHT * jnp.sum((coils.length - LENGTH_TARGET)**2),
+            0.5 * LENGTH_WEIGHT * jnp.sum(
+                jnp.maximum(coils.length - LENGTH_LIMIT, 0.0)**2),
             0.5 * CURVATURE_WEIGHT * jnp.sum(
                 jnp.maximum(coils.curvature - CURVATURE_LIMIT, 0.0)**2),
             0.5 * COIL_DISTANCE_WEIGHT * loss_coil_separation(
