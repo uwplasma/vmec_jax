@@ -87,6 +87,34 @@ def test_free_boundary_config_validates_adjoint_fail():
         make_free_boundary_config(inp, field, adjoint_fail="warn")
 
 
+def test_host_adjoint_best_effort_warns_instead_of_raising(monkeypatch):
+    """A stalled Krylov solve is a warning under the opt-in policy, not a stop.
+
+    The stall arrives inside the VJP, where an optimizer's own
+    ``lax.cond`` on the solve status cannot catch it, so a raise ends the
+    whole run over one bad line-search trial.  Under ``best_effort`` the
+    inaccurate direction is returned instead and the line search rejects it.
+    """
+    cfg = SimpleNamespace(adjoint_tol=1.0e-10, adjoint_maxiter=5,
+                          adjoint_gcrot_m=2, adjoint_gcrot_k=1)
+
+    def residual(z, params, field, base, rcon, zcon):
+        return 2.0 * z
+
+    z_star, rhs = jnp.arange(4.0), jnp.ones(4)
+    # A Krylov solve that returns a deliberately wrong answer, so the true
+    # residual check that follows it cannot pass.
+    monkeypatch.setattr(fbi, "gcrotmk", lambda *args, **kwargs: (np.zeros(4), 0))
+    call = lambda **kw: fbi._host_adjoint(
+        residual, z_star, None, None, z_star, None, None, rhs, cfg, **kw)
+
+    with pytest.raises(AdjointSolveError, match="did not converge"):
+        call()
+    with pytest.warns(RuntimeWarning, match="best_effort"):
+        solution = call(fail="best_effort")
+    np.testing.assert_allclose(np.asarray(solution), np.zeros(4))
+
+
 def test_free_boundary_warm_failure_retries_once_from_cold(monkeypatch):
     """A bad cached state is discarded, but implementation errors are not."""
     inp = dataclasses.replace(
