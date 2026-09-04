@@ -105,8 +105,9 @@ def test_host_adjoint_best_effort_warns_instead_of_raising(monkeypatch):
     # A Krylov solve that returns a deliberately wrong answer, so the true
     # residual check that follows it cannot pass.
     monkeypatch.setattr(fbi, "gcrotmk", lambda *args, **kwargs: (np.zeros(4), 0))
-    call = lambda **kw: fbi._host_adjoint(
-        residual, z_star, None, None, z_star, None, None, rhs, cfg, **kw)
+    def call(**kwargs):
+        return fbi._host_adjoint(
+            residual, z_star, None, None, z_star, None, None, rhs, cfg, **kwargs)
 
     with pytest.raises(AdjointSolveError, match="did not converge"):
         call()
