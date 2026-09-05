@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -41,6 +42,11 @@ CURRENT_DERIVATIVE = 0.002
 FTOL = 1.0e-12
 MAX_ITERATIONS = 1000
 OUTPUT_DIR = Path("results/stellarator_mirror_hybrid")
+# The reviewed figure the docs embed is written straight into the documentation
+# tree as lossless WebP, so re-running this script reproduces the committed
+# bytes; VMEX_EXAMPLES_CI=1 redirects it to OUTPUT_DIR instead.
+CI = os.environ.get("VMEX_EXAMPLES_CI") == "1"
+FIGURE_DIR = OUTPUT_DIR if CI else REPO_ROOT / "docs" / "_static" / "figures"
 
 jax.config.update("jax_enable_x64", True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +79,7 @@ result = solve_fixed_boundary(
     axis=setup.axis,
     require_convergence=True,
 )
-figure = plot_stellarator_mirror_hybrid(result, setup, OUTPUT_DIR)
+figure = plot_stellarator_mirror_hybrid(result, setup, FIGURE_DIR, image_format="webp")
 field_line = trace_closed_field_line(
     result.evaluated.energy.field,
     setup.discretization,

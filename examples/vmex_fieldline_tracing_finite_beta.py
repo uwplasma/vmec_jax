@@ -4,6 +4,10 @@
 The commented ``Coils.from_simsopt`` line accepts a SIMSOPT coil JSON without
 changing the VMEX virtual-casing or ESSOS tracing workflow.
 Preview: this script needs ESSOS branch ``rj/vmex-optimization-interfaces``.
+
+Outside the CI smoke run, the phi=0 Poincare panel pair the README embeds is
+also written straight into ``docs/_static/figures`` as lossless WebP, so
+re-running this script reproduces the committed bytes.
 """
 
 from dataclasses import replace
@@ -16,6 +20,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.transforms import Bbox
 import numpy as np
 import vmex as vj
 from vmex import optimize as opt
@@ -34,6 +39,8 @@ except ImportError as error:
     ) from error
 
 DATA = Path(__file__).resolve().parent / "data"
+README_FIGURE = (Path(__file__).resolve().parents[1] / "docs" / "_static" / "figures"
+                 / "readme_extender_exterior_islands.webp")
 N_FIELDLINES, N_TOROIDAL_TURNS, TRACE_LENGTH, N_SAMPLES = 14, 400, 3000.0, 25000
 # Cartesian coil/exterior traces use arclength, so rescaling B does not change coverage.
 TRACE_TOLERANCE, OUTSIDE_OFFSET = 1.0e-7, 0.005
@@ -187,10 +194,22 @@ legend_handles = [
 ]
 axis3d.legend(handles=legend_handles, fontsize=7, loc="lower center",
               bbox_to_anchor=(0.5, -0.02), ncol=2, frameon=False)
-figure.suptitle(r"Finite-beta field lines at $\phi=0$", y=0.98)
+title = figure.suptitle(r"Finite-beta field lines at $\phi=0$", y=0.98)
 figure.subplots_adjust(left=0.01, right=0.99, bottom=0.05, top=0.90, wspace=0.08)
 figure.savefig("vmex_fieldline_tracing_finite_beta.png", dpi=200,
-               bbox_inches="tight", pad_inches=0.04); plt.close(figure)
+               bbox_inches="tight", pad_inches=0.04)
+if not ci_smoke:
+    # The README shows only the phi=0 Poincare pair: crop it from the same
+    # render rather than by hand, so the committed figure has one generator.
+    # The figure title straddles the 3-D panel and the pair; hide it so its
+    # descender does not stray into the crop.
+    title.set_visible(False)
+    renderer = figure.canvas.get_renderer()
+    pair = Bbox.union([panel.get_tightbbox(renderer) for panel in (poincare_coils, poincare_total)])
+    figure.savefig(README_FIGURE, dpi=200, bbox_inches=pair.transformed(figure.dpi_scale_trans.inverted()),
+                   pad_inches=0.04, pil_kwargs={"lossless": True})
+    print(f"Wrote {README_FIGURE}")
+plt.close(figure)
 bounded = ~np.asarray(vmex_outside.boundary_hits)
 crossings = np.asarray([len(row[0]) for row in outside_sections])
 offsets = np.asarray((seed_fractions[~inside] - 1.0) * edge_radius)

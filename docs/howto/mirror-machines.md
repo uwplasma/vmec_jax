@@ -44,7 +44,11 @@ python examples/mirror/qi_mirror_hybrid_fourier_vs_bspline.py     # QI-mirror hy
 The first checks every convergence gate for the rotating ellipse and the
 axisymmetric mirror, differentiates rotating-ellipse volume against two fully
 reconverged solves, and writes MOUT plus 3-D, cross-section, `|B|`, residual,
-symmetry, and analytic-direction figures.
+symmetry, and analytic-direction figures. The figures that the README and
+these pages embed (the paired 3-D view, the beta-scan composite, and the
+hybrid panel) are written by these scripts straight into
+`docs/_static/figures/` as lossless WebP, so re-running a script reproduces
+the committed figure; `docs/_static/figures/figures.json` records each one.
 
 ## Plot the results
 
@@ -64,8 +68,9 @@ python examples/mirror/mirror_free_boundary_beta_scan.py
 ```
 
 The script solves every beta point from 0 through 50% and writes one MOUT per
-state, a compact JSON summary, restart files, and reviewed figures under
-`results/mirror_free_boundary_beta_scan/`. The example's two ESSOS loops are
+state, a compact JSON summary, restart files, and per-state figures under
+`results/mirror_free_boundary_beta_scan/`, and the beta-scan composite under
+`docs/_static/figures/`. The example's two ESSOS loops are
 sized to the plasma: radius 0.5 m at z = +/-1.0 m carrying 3.72e5 A each,
 reproducing the central vacuum field B(0) = 0.0836 T of the recorded
 benchmark geometry with vacuum mirror ratio 4.58. The axisymmetric

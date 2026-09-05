@@ -71,6 +71,10 @@ COIL_SEPARATION = 2.0
 COIL_CURRENT = 3.72e5
 CENTER_RADIUS = 0.25
 OUTPUT_DIR = Path("results/mirror_free_boundary_beta_scan")
+# The beta-scan composite the README embeds is written straight into the
+# documentation tree as lossless WebP, so re-running this script reproduces the
+# committed bytes; the CI smoke run redirects it to OUTPUT_DIR instead.
+FIGURE_DIR = OUTPUT_DIR if CI else REPO_ROOT / "docs" / "_static" / "figures"
 SAVE_RESTARTS = True
 RESTART_FROM = None  # e.g. OUTPUT_DIR / "beta_003p0pct.npz"; then trim BETAS
 
@@ -237,10 +241,11 @@ composite = plot_axisymmetric_beta_scan_summary(
         )
         for beta, row in zip(BETAS, summary, strict=True)
     ],
-    OUTPUT_DIR,
+    FIGURE_DIR,
     display=tuple(display_indices),
     name="mirror_free_boundary_beta_scan",
     strong_force_gate=STRONG_FORCE_GATE,
+    image_format="webp",
 )
 
 # The figure stays clean (short title + panel labels only); the coil geometry,
