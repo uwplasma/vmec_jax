@@ -10,7 +10,9 @@ the remaining physics and distributed solver work is not yet implemented.
 
 - **Completed checkpoint (2026-09-05 UTC):** user approved this plan. A's
   true-residual acceptance gate (R1) is implemented and locally validated on this
-  branch; broader work packages remain open. Merge/CI status is tracked by PR.
+  branch; broader work packages remain open. Implementation commit `b2bd9da6`,
+  [PR #268](https://github.com/uwplasma/vmex/pull/268), stacked on #267; open,
+  awaiting CI/merge at this checkpoint. All commits are authored `rogeriojorge`.
 - **Resume location:** `/Users/rogeriojorge/local/vmex-acceptance`, branch
   `fix/polish-true-residual`, based on plan commit `8ff1af78` (plan PR #267).
   Original user worktrees are preserved. This branch stacks on the plan PR.
@@ -36,7 +38,7 @@ the remaining physics and distributed solver work is not yet implemented.
   `office:/home/rjorge/local/vmex-acceptance`, detached baseline `09f18464`;
   run the focused subset with `/home/rjorge/venvs/vmex-gpu/bin/python` and
   `JAX_PLATFORMS=cuda,cpu`. The GPU integration test has not been run.
-- **Next:** review/merge the scoped R1 PR stacked on #267. Then implement the
+- **Next:** review/merge R1 PR #268 stacked on #267. Then implement the
   next A checkpoint: unify the force certificate predicate at
   `polish_legacy_solution`'s early return and `polish_collocation_least_squares`'s
   completion, retaining finite-data, quadrature and geometry checks in both.
