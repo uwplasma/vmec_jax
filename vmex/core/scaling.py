@@ -39,7 +39,9 @@ _WOUT_POWERS = {
     **{name: (1, 2) for name in (
         "phi", "phipf", "chi", "chipf", "phips",
     )},
-    **{name: (2, 0) for name in ("presf", "mass", "pres", "bdotb")},
+    **{name: (2, 0) for name in (
+        "presf", "mass", "pres", "bdotb", "am_aux_f",
+    )},
     **{name: (0, 3) for name in ("volume_p", "vp", "gmnc", "gmns")},
     **{name: (1, -1) for name in (
         "bdotgradv", "bsupumnc", "bsupvmnc", "bsupumns", "bsupvmns",
@@ -51,6 +53,42 @@ _WOUT_POWERS = {
     **{name: (-2, -4) for name in (
         "DMerc", "DShear", "DWell", "DCurr", "DGeod",
     )},
+}
+
+# Pressure-profile coefficients.  ``presf``/``pres``/``mass`` scale as B**2,
+# and the parameterization that produced them has to follow, or the wout's
+# namelist echo re-runs to the unscaled pressure.  A wout records no
+# PRES_SCALE, so the factor lands in the coefficients themselves, and only
+# in the entries that multiply the profile: widths, exponents, centres, and
+# mixing fractions are shape data.  Which entries are amplitudes depends on
+# ``pmass_type`` (``vmex.core.profiles``): the power series and the
+# pedestal polynomial are linear in every coefficient, the peaked shapes
+# carry one amplitude ahead of their shape parameters, ``rational`` scales
+# through its numerator, and the tabulated kinds ignore ``am`` and keep the
+# pressure in ``am_aux_f``, which is linear in the knot values for every
+# tabulated kind (and zero-filled otherwise), so it sits in the table above.
+#
+# ``ai``/``ai_aux_f`` are deliberately left alone: iota (or q under lrfp) is
+# dimensionless.  ``ac``/``ac_aux_f`` are deliberately left alone for every
+# ``pcurr_type``, including the ``*_i``/``*_ip`` spline kinds whose knots
+# tabulate I or I': ``profil1d.f`` (``setup.flux_profiles``) divides the
+# shape by its own edge value and multiplies by CURTOR,
+# ``Itor = signgs*mu0*curtor/(2*pi*pcurr(1))``, and drops the profile
+# entirely when ``pcurr(1)`` vanishes, so the coefficients never carry an
+# ampere.  The current amplitude lives in ``ctor``, scaled as B*R above.
+_PRESSURE_AMPLITUDES: dict[str, tuple[int, ...]] = {
+    "power_series": tuple(range(21)),
+    # c[0:16] polynomial, c[17] pedestal height; c[16] unused, c[18] centre,
+    # c[19] width, c[20] the normalization VMEC recomputes.
+    "pedestal": tuple(range(16)) + (17,),
+    "two_power": (0,),
+    "two_power_gs": (0,),
+    "two_lorentz": (0,),
+    "gauss_trunc": (0,),
+    "rational": tuple(range(10)),   # numerator c[0:10] over denominator c[10:21]
+    "cubic_spline": (),
+    "akima_spline": (),
+    "line_segment": (),
 }
 
 
@@ -115,15 +153,38 @@ def scale_mgrid(
     )
 
 
+def _scale_pressure_coefficients(pmass_type: str, am: Any, factor: float) -> Any:
+    """Scale the amplitude entries of ``am`` for ``pmass_type`` by ``factor``."""
+    if am is None:
+        return None
+    kind = str(pmass_type).strip().lower()
+    if kind not in _PRESSURE_AMPLITUDES:
+        raise NotImplementedError(
+            f"pmass_type={pmass_type!r} not implemented "
+            f"(supported: {sorted(_PRESSURE_AMPLITUDES)})"
+        )
+    scaled = np.array(am, dtype=float).reshape(-1)
+    slots = [i for i in _PRESSURE_AMPLITUDES[kind] if i < scaled.size]
+    scaled[slots] *= factor
+    return scaled.reshape(np.shape(am))
+
+
 def scale_wout(
     data: WoutData, *, b_scale: float = 1.0, r_scale: float = 1.0,
 ) -> WoutData:
-    """Return the dimensional similarity transform of a converged WOUT."""
+    """Return the dimensional similarity transform of a converged WOUT.
+
+    The pressure arrays and the ``am``/``am_aux_f`` coefficients that
+    generated them scale together, so the profile the wout echoes evaluates
+    to its own ``presf``; see ``_PRESSURE_AMPLITUDES`` for which entries of
+    ``am`` carry the factor and why ``ac``/``ai`` do not move.
+    """
     b, r = _scales(b_scale, r_scale)
     changes = {
         name: _times(getattr(data, name), b**b_power * r**r_power)
         for name, (b_power, r_power) in _WOUT_POWERS.items()
     }
+    changes["am"] = _scale_pressure_coefficients(data.pmass_type, data.am, b**2)
     return replace(data, **changes)
 
 
