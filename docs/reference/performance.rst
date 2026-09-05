@@ -416,6 +416,28 @@ absolute tolerances cover the golden run's own remaining non-convergence.
 wout files are compared per-variable with CompareWOut-style combined
 rel+abs tolerances.
 
+Keeping the persistent cache small
+----------------------------------
+
+The persistent compilation cache is bounded by entry count as well as by
+bytes.  JAX re-scans the whole cache directory on every *write*: ``put``
+globs each entry, stats it and reads its access-time sidecar, all under the
+directory-wide lock.  The cost is linear in the number of resident entries —
+0.028 ms per entry on an Apple M4 — so a write costs 5.7 ms at 250 entries
+and 304 ms at 10880, the size a working machine reaches in a few weeks.
+VMEX stores every program (the sub-second ones repay their cost on reload),
+so a cold solve writes a few hundred entries and a mature cache turned a
+7.5 s solve into 31.3 s, 82% of it directory scans.
+
+JAX's own bound is on bytes and these entries are small, so it never fires.
+VMEX therefore trims the directory to its least-recently-used ``1024``
+entries once per process, before anything writes: one scan per process
+instead of one per write.  The same solve then costs 11.5 s on that cache,
+and a warm rerun 3.1 s with 289 of 289 lookups hitting — pruning by access
+time keeps the working set.  Set ``VMEX_CACHE_MAX_ENTRIES`` to change the
+bound, or to ``0`` to disable trimming.  The measurements, with provenance,
+are in ``benchmarks/cache_entry_scaling_m4_2026-09-03.json``.
+
 Fresh decks against ``xvmec2000`` (2026-09-02)
 -----------------------------------------------
 

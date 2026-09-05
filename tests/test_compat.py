@@ -420,3 +420,110 @@ def test_configure_compilation_cache_applies_and_survives_failures(monkeypatch):
     })
     _compat._configure_compilation_cache(jx, "/tmp/vmex-cache-test")
     assert jx.config.updates == {}
+
+
+# ---------------------------------------------------------------------------
+# resident-entry bound (JAX re-scans the cache directory on every write)
+# ---------------------------------------------------------------------------
+
+
+def _seed_cache(path, count):
+    """Write ``count`` cache entries whose atimes increase with the index."""
+    for i in range(count):
+        (path / f"k{i}-cache").write_bytes(b"x")
+        (path / f"k{i}-atime").write_bytes(i.to_bytes(8, "little"))
+
+
+def test_prune_cache_entries_keeps_the_most_recently_used(tmp_path):
+    _seed_cache(tmp_path, 50)
+    assert _compat._prune_cache_entries(str(tmp_path), 10) == 40
+    kept = sorted(int(p.name[1:-6]) for p in tmp_path.glob("*-cache"))
+    assert kept == list(range(40, 50))
+    # the atime sidecars go with their entries, so the directory does not
+    # accumulate orphans that the next scan would still have to stat
+    assert len(list(tmp_path.glob("*-atime"))) == 10
+    # already inside the bound: no work, no deletions
+    assert _compat._prune_cache_entries(str(tmp_path), 10) == 0
+
+
+def test_prune_cache_entries_survives_a_hostile_directory(tmp_path):
+    _seed_cache(tmp_path, 5)
+    (tmp_path / "k2-atime").unlink()  # entry with no atime sidecar
+    assert _compat._prune_cache_entries(str(tmp_path), 2) == 3
+    assert len(list(tmp_path.glob("*-cache"))) == 2
+    # a missing directory is not an error: the cache may not exist yet
+    assert _compat._prune_cache_entries(str(tmp_path / "absent"), 1) == 0
+
+
+def test_configure_compilation_cache_bounds_resident_entries(tmp_path, monkeypatch):
+    monkeypatch.delenv("VMEX_CACHE_MAX_ENTRIES", raising=False)
+    monkeypatch.delenv("VMEC_JAX_CACHE_MAX_ENTRIES", raising=False)
+    _seed_cache(tmp_path, _compat._CACHE_MAX_ENTRIES + 7)
+    fake = types.SimpleNamespace(config=_FakeConfig())
+    _compat._configure_compilation_cache(fake, str(tmp_path))
+    assert len(list(tmp_path.glob("*-cache"))) == _compat._CACHE_MAX_ENTRIES
+
+    # the bound is tunable, and 0 turns it off
+    monkeypatch.setenv("VMEX_CACHE_MAX_ENTRIES", "3")
+    _compat._configure_compilation_cache(fake, str(tmp_path))
+    assert len(list(tmp_path.glob("*-cache"))) == 3
+    monkeypatch.setenv("VMEX_CACHE_MAX_ENTRIES", "0")
+    _seed_cache(tmp_path, 20)
+    before = len(list(tmp_path.glob("*-cache")))
+    _compat._configure_compilation_cache(fake, str(tmp_path))
+    assert len(list(tmp_path.glob("*-cache"))) == before
+
+
+def test_prune_cache_entries_gives_up_quietly_on_every_failure(tmp_path, monkeypatch):
+    """Pruning is housekeeping: no failure of it may stop a solve.
+
+    Each branch that returns early or skips an entry is exercised: an
+    unreadable directory, a lock another process holds, an entry that cannot
+    be removed, and a sidecar that vanished first.
+    """
+    import pathlib
+
+    import filelock
+
+    _seed_cache(tmp_path, 6)
+
+    # an unreadable directory (glob itself fails) is not an error
+    monkeypatch.setattr(pathlib.Path, "glob", lambda self, pattern: (_ for _ in ()).throw(OSError("unreadable")))
+    assert _compat._prune_cache_entries(str(tmp_path), 2) == 0
+    monkeypatch.undo()
+
+    # a lock held elsewhere means someone else is pruning: leave it to them
+    def _busy(self, timeout=None, **kwargs):
+        raise filelock.Timeout(str(self.lock_file))
+
+    monkeypatch.setattr(filelock.FileLock, "acquire", _busy)
+    assert _compat._prune_cache_entries(str(tmp_path), 2) == 0
+    assert len(list(tmp_path.glob("*-cache"))) == 6
+    monkeypatch.undo()
+
+    # an entry that cannot be unlinked is skipped, and a sidecar that is
+    # already gone does not stop the sweep
+    (tmp_path / "k0-atime").unlink()
+    real_unlink = pathlib.Path.unlink
+
+    def _stubborn(self, *args, **kwargs):
+        if self.name == "k1-cache":
+            raise OSError("busy")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", _stubborn)
+    removed = _compat._prune_cache_entries(str(tmp_path), 2)
+    monkeypatch.undo()
+    assert removed == 3
+    assert (tmp_path / "k1-cache").exists()
+    assert len(list(tmp_path.glob("*-cache"))) == 3
+
+
+def test_configure_compilation_cache_ignores_an_unparseable_entry_bound(tmp_path, monkeypatch):
+    monkeypatch.setenv("VMEX_CACHE_MAX_ENTRIES", "many")
+    _seed_cache(tmp_path, 4)
+    fake = types.SimpleNamespace(config=_FakeConfig())
+    _compat._configure_compilation_cache(fake, str(tmp_path))
+    # the bound is skipped, the rest of the configuration still lands
+    assert len(list(tmp_path.glob("*-cache"))) == 4
+    assert fake.config.updates["jax_compilation_cache_dir"] == str(tmp_path)
