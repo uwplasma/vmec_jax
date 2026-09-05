@@ -768,7 +768,7 @@ def polish_strong_root(
         (solve_size,), dtype=jnp.asarray(runtime.native.R_cos).dtype
     )
     full_zero = jnp.zeros((runtime.layout.size,), dtype=zero.dtype)
-    if float(initial_certificate.normalized_l2) <= config.certificate_tolerance:
+    if not _failed_certificate_checks(initial_certificate, config):
         report = PolishReport(
             converged=True,
             termination_reason="already-certified",
@@ -784,6 +784,7 @@ def polish_strong_root(
             minimum_signed_jacobian=float(initial_certificate.minimum_signed_jacobian),
             factor_build_seconds=runtime.low_preconditioner.factor_build_seconds,
             solve_seconds=perf_counter() - started,
+            radial_refinement_tolerance=config.radial_refinement_tolerance,
         )
         return PolishResult(runtime.native, initial_certificate, report, full_zero)
     _, _, adaptive_continuation, _, pseudo_transient_continuation = (
@@ -985,7 +986,8 @@ def polish_strong_root(
 
     state = _corrected_state(vector, runtime, chart)
     certificate = certify_strong_force(state)
-    certified = float(certificate.normalized_l2) <= config.certificate_tolerance
+    failed_checks = _failed_certificate_checks(certificate, config)
+    certified = not failed_checks
     report = PolishReport(
         converged=certified,
         termination_reason="certified" if certified else "certification-failed",
@@ -1001,13 +1003,18 @@ def polish_strong_root(
         minimum_signed_jacobian=float(certificate.minimum_signed_jacobian),
         factor_build_seconds=factor_build_seconds,
         solve_seconds=perf_counter() - started,
+        radial_refinement_tolerance=config.radial_refinement_tolerance,
     )
     if not certified and config.fail_policy == "raise":
         raise StrongForceCertificationError(
-            "strong root failed the independent force certificate",
+            "strong root failed the independent force certificate: "
+            + "; ".join(failed_checks),
             hint="increase radial degree/resolution and retry once",
+            solver_converged=True,
             normalized_l2=float(certificate.normalized_l2),
             tolerance=config.certificate_tolerance,
+            radial_refinement=float(certificate.radial_refinement_difference),
+            radial_refinement_tolerance=config.radial_refinement_tolerance,
         )
     if not certified:
         return PolishResult(runtime.native, initial_certificate, report, full_zero)
@@ -1103,20 +1110,22 @@ def _failed_certificate_checks(
     """Name each independent acceptance check the certificate failed."""
 
     failed = []
-    if float(certificate.normalized_l2) > config.certificate_tolerance:
-        failed.append(
-            f"independent force L2 {float(certificate.normalized_l2):.3E}"
-            f" > tolerance {config.certificate_tolerance:.3E}")
-    if (float(certificate.radial_refinement_difference)
-            > config.radial_refinement_tolerance):
-        failed.append(
-            "radial refinement difference "
-            f"{float(certificate.radial_refinement_difference):.3E}"
-            f" > tolerance {config.radial_refinement_tolerance:.3E}")
-    if float(certificate.minimum_signed_jacobian) <= 0.0:
-        failed.append(
-            "minimum signed Jacobian "
-            f"{float(certificate.minimum_signed_jacobian):.3E} <= 0")
+    for name, value, lower, upper in (
+        ("independent force L2", certificate.normalized_l2,
+         0.0, config.certificate_tolerance),
+        ("radial refinement difference", certificate.radial_refinement_difference,
+         0.0, config.radial_refinement_tolerance),
+        ("minimum signed Jacobian", certificate.minimum_signed_jacobian,
+         0.0, None),
+    ):
+        value = float(value)
+        if not np.isfinite(value):
+            failed.append(f"{name} is nonfinite ({value})")
+        elif upper is None:
+            if value <= lower:
+                failed.append(f"{name} {value:.3E} <= {lower:g}")
+        elif not lower <= value <= upper:
+            failed.append(f"{name} {value:.3E} outside [{lower:g}, {upper:.3E}]")
     return tuple(failed)
 
 
@@ -1232,12 +1241,8 @@ def polish_collocation_least_squares(
     vector = variable_scale_array * solution.x
     state = _corrected_state(vector, runtime, chart)
     certificate = certify_strong_force(state)
-    independently_certified = bool(
-        float(certificate.normalized_l2) <= config.certificate_tolerance
-        and float(certificate.radial_refinement_difference)
-        <= config.radial_refinement_tolerance
-        and float(certificate.minimum_signed_jacobian) > 0.0
-    )
+    failed_checks = _failed_certificate_checks(certificate, config)
+    independently_certified = not failed_checks
     # Acceptance is the independent certificate - the volume-L2 bar, radial
     # refinement stability, and a positive signed Jacobian - exactly as the
     # published contract states. The Gauss-Newton solver's internal relative
@@ -1282,9 +1287,7 @@ def polish_collocation_least_squares(
             report.initial_normalized_l2, report.final_normalized_l2,
             config.certificate_tolerance,
             verdict="CERTIFIED" if converged else "FAILED",
-            failed_checks=(
-                () if converged
-                else _failed_certificate_checks(certificate, config))),
+            failed_checks=failed_checks),
             end="")
     if converged:
         return PolishResult(
@@ -1296,7 +1299,7 @@ def polish_collocation_least_squares(
         )
     if config.fail_policy == "raise":
         raise StrongForceCertificationError(
-            "collocation polish failed its stationarity or force certificate",
+            "collocation polish failed its force certificate: " + "; ".join(failed_checks),
             hint="inspect the polish report and refine the radial representation",
             solver_converged=bool(solution.converged),
             normalized_l2=float(certificate.normalized_l2),
@@ -1387,7 +1390,7 @@ def polish_legacy_solution(
         emit(" initial certificate: EPS-F = "
              f"{float(initial_certificate.normalized_l2):.3E}"
              f"  (tolerance {config.certificate_tolerance:.3E})")
-    if float(initial_certificate.normalized_l2) <= config.certificate_tolerance:
+    if not _failed_certificate_checks(initial_certificate, config):
         report = PolishReport(
             converged=True,
             termination_reason="already-certified",
@@ -1403,6 +1406,7 @@ def polish_legacy_solution(
             minimum_signed_jacobian=float(initial_certificate.minimum_signed_jacobian),
             factor_build_seconds=0.0,
             solve_seconds=perf_counter() - started,
+            radial_refinement_tolerance=config.radial_refinement_tolerance,
         )
         if verbose:
             emit(polish_certificate_summary(

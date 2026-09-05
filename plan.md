@@ -8,44 +8,53 @@ the remaining physics and distributed solver work is not yet implemented.
 
 ## Execution logbook
 
-- **Completed checkpoint (2026-09-05 UTC):** user approved this plan. A's
-  true-residual acceptance gate (R1) is implemented and locally validated on this
-  branch; broader work packages remain open. Implementation commit `b2bd9da6`,
-  [PR #268](https://github.com/uwplasma/vmex/pull/268), stacked on #267; open,
-  awaiting CI/merge at this checkpoint. All commits are authored `rogeriojorge`.
-- **Resume location:** `/Users/rogeriojorge/local/vmex-acceptance`, branch
-  `fix/polish-true-residual`, based on plan commit `8ff1af78` (plan PR #267).
-  Original user worktrees are preserved. This branch stacks on the plan PR.
-- **Implemented:** finite unpreconditioned derivative
-  certificates in `polish_implicit.py`; no new production API or files. Internal
-  Krylov flags cannot override the true certificate. Norm overflow fails closed.
-- **Validation:** focused `-k polish_linear` tests: 42 passed on office
-  RTX A4000 (8.68 s; `JAX_PLATFORMS=cuda,cpu`, JAX 0.9.2, float64), including
-  actual JIT, both operator directions and exhausted GMRES. Local static
-  preflight passed (43 guards, 3 skips; Ruff, mypy, documentation prose).
-  CPU focused plus existing `collocation_polish_primal_and_derivatives` integration
-  test: 43 passed, 60 deselected in 374.17 s. This includes tangent/adjoint duality,
-  custom VJP, Boozer-objective pullback and stationarity Taylor checks. The long
-  integration uses the suite's default disabled JIT; focused tests explicitly
-  enable it. No full-suite or distributed-equilibrium claim is made.
-- **Baseline repair:** plan PR #267 now uses portable evidence path/host
-  placeholders (`b10b7c8e`, `8ff1af78`); its portability regression passes.
-  Raw evidence files and hashes remain unchanged.
-- **Commands:** from the resume worktree,
-  `VMEX_COMPILATION_CACHE=disabled python3 -m pytest -q tests/test_polish_preconditioner.py -k 'polish_linear or collocation_polish_primal_and_derivatives'`
-  and `python3 tools/preflight.py --static`. Focused CPU subset: 42 passed in
-  2.32 s. GPU source/test copies are isolated in
-  `office:/home/rjorge/local/vmex-acceptance`, detached baseline `09f18464`;
-  run the focused subset with `/home/rjorge/venvs/vmex-gpu/bin/python` and
-  `JAX_PLATFORMS=cuda,cpu`. The GPU integration test has not been run.
-- **Next:** review/merge R1 PR #268 stacked on #267. Then implement the
-  next A checkpoint: unify the force certificate predicate at
-  `polish_legacy_solution`'s early return and `polish_collocation_least_squares`'s
-  completion, retaining finite-data, quadrature and geometry checks in both.
-  Follow with explicit stationarity eligibility in `PolishContext` and the
-  derivative entry points; today's integration fixture deliberately permits
-  physics acceptance after one GN step, so it is not proof of nonlinear-root
-  derivative accuracy. Do not mark all of A complete after R1.
+- **Completed checkpoint (2026-09-05 UTC):** A/R2 force-certificate consistency.
+  Worktree `/Users/rogeriojorge/local/vmex-certificates`, branch
+  `fix/polish-certificate-consistency`, based on R1 checkpoint `5d3b3829`.
+  Preserve the original user worktrees. All commits use author `rogeriojorge`.
+- **Previous checkpoint:** R1 implementation `b2bd9da6`, [PR #268](https://github.com/uwplasma/vmex/pull/268),
+  stacked on plan PR #267. CPU 43 selected tests passed in 374.17 s; GPU 42
+  focused tests passed in 8.68 s; static preflight passed. Both PRs remain open;
+  completed #268 CI checks have passed, with other lanes still running.
+- **Implemented:** reuse `_failed_certificate_checks` for the public legacy
+  early return, collocation completion and both retired continuation acceptance
+  points. Require finite nonnegative force/quadrature metrics within tolerance
+  and a finite strictly positive sampled Jacobian. Failure messages use the
+  same checks; no new acceptance API. All 68 route regressions pass (0.42 s).
+  Static preflight and the warning-strict documentation build pass.
+- **Integration finding:** the old public-solver test expected `already-certified`
+  after checking only the force norm; with the repaired predicate it performs
+  correction and returns `independently-certified` instead (274.61 s run).
+  Keep the existing thresholds and update the test to verify initial quadrature
+  failure, an actual correction and a valid final certificate. Rerun passed:
+  1 test, 170 deselected, 285.55 s with
+  `VMEX_COMPILATION_CACHE=disabled python3 -m pytest -q tests/test_polish_preconditioner.py -k public_solver_auto_corrects`.
+  The second selection, `-k 'polish_driver_skips or polish_driver_records or collocation_polish_primal_and_derivatives'`,
+  passed: 3 tests, 168 deselected, 358.04 s. This verifies retired early return,
+  bounded failure and the existing polished tangent/adjoint/VJP chain.
+  Static preflight: Ruff/mypy/prose and 43 guard tests passed (3 skipped).
+  Warning-strict Sphinx build passed. These CPU test durations are validation
+  costs, not performance benchmarks; the GPU integration suite was not rerun.
+- **Consumer audit:** `core/cli.py::_write_wout_from_result` (the native export
+  gate near line 711) already requires `polish_report.converged`; multigrid
+  reports failed polish explicitly. The public result retains the original
+  native lift on `return_unpolished`, so callers must inspect the polish report,
+  not infer certification from a non-None native state. Direct native export and
+  resumed-solve contracts remain to test under the wider A task.
+- **New derivative reproducer:** `_implicit_collocation_leaves_fwd` saves correction
+  and variable scale but discards primal native leaves. Its backward pass uses
+  `runtime.native`, which can differ from the input. Analytic `g(c,q)=c-q^2`,
+  output `q+c`, stale runtime `q=1`, input `q=2`, stationary `c=4`: expected
+  implicit gradient 5, observed 3. Script is outside git at
+  `vmex-review-evidence-20260905/polish_native_provenance_probe.py`. This is a
+  synthetic provenance regression, not an MHD benchmark. Fix/reject stale native
+  data as part of derivative eligibility, with changed-input JIT regression.
+- **Next:** commit this checkpoint and open a PR stacked on #268. Fix the
+  reproduced stale-native VJP in a separate checkpoint, then enforce
+  nonlinear stationarity eligibility separately in `PolishContext` and derivative
+  entry points. Physics acceptance alone still does not certify an IFT gradient.
+  Keep the wider A acceptance/export/resume task open until all paths and
+  stationarity contracts are covered.
 
 ## 1. Outcome and order of work
 
