@@ -229,7 +229,7 @@ class StrongForceReport:
     radial_refinement_difference: Array
     #: Smallest signed Jacobian on the sample, in machine units.
     minimum_signed_jacobian: Array
-    #: The same minimum divided by the mean |Jacobian|: scale-free, so it is
+    #: The same minimum divided by the mean absolute Jacobian: scale-free, so it is
     #: comparable across devices.  See :func:`_nestedness_margin`.
     nestedness_margin: Array
     boundary_residual: Array
