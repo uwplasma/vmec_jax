@@ -344,7 +344,7 @@ def _implicit_collocation_leaves_fwd(
         chart,
         config,
     )
-    return output, (correction, variable_scale)
+    return output, (native_leaves, correction, variable_scale)
 
 
 def _implicit_collocation_leaves_bwd(
@@ -354,7 +354,11 @@ def _implicit_collocation_leaves_bwd(
     saved,
     output_cotangent_leaves,
 ):
-    correction, variable_scale = saved
+    native_leaves, correction, variable_scale = saved
+    # The frozen discretization may be reused, but the adjoint must linearize
+    # at the native inputs of this forward call, not the runtime's old state.
+    native = jax.tree.unflatten(jax.tree.structure(runtime.native), native_leaves)
+    runtime = replace(runtime, native=native)
     output_cotangent = jax.tree.unflatten(
         jax.tree.structure(runtime.native), output_cotangent_leaves
     )
