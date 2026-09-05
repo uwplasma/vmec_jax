@@ -319,6 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Radial B-spline spans of the polished representation "
             "(default: derived from the solve resolution)."
         ))
+    p.add_argument(
+        "--polish-budget", type=float, default=None, metavar="SECONDS",
+        help=(
+            "Wall-clock ceiling --polish auto will commit to before it "
+            "declines and returns the equilibrium unpolished "
+            "(PolishConfig.auto_budget_seconds). --polish true ignores it."
+        ))
     p.add_argument("--ftol", type=float, default=None, help="Override the final-stage FTOL_ARRAY tolerance.")
     p.add_argument("--max-iter", type=int, default=None, help="Override the final-stage NITER_ARRAY iteration cap.")
     p.add_argument(
@@ -509,12 +516,14 @@ def _resolve_polish_cli(args, file_options):
         polish_degree=args.polish_degree,
         polish_max_iter=args.polish_max_iter,
         polish_spans=args.polish_spans,
+        polish_budget=args.polish_budget,
     )
     cli_supplied = {
         "polish": args.polish, "polish_tol": args.polish_tol,
         "polish_fail": args.polish_fail, "polish_degree": args.polish_degree,
         "polish_max_iter": args.polish_max_iter,
         "polish_spans": args.polish_spans,
+        "polish_budget": args.polish_budget,
     }
     sources = {name: ("cli" if cli_supplied[name] is not None else origin)
                for name, origin in sources.items()}

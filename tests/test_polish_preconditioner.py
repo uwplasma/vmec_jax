@@ -940,6 +940,93 @@ def test_structured_chart_uses_only_physical_layout_channels(small_strong_root):
     )
 
 
+def _solved_solovev_strong_runtime(ntor: int):
+    """Build a strong-root runtime from a converged tiny solovev solve."""
+
+    inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=3,
+        ntor=ntor,
+        ntheta=12,
+        nzeta=1 if ntor == 0 else 4,
+    )
+    inp = dataclasses.replace(
+        inp,
+        ns_array=np.asarray([5]),
+        ftol_array=np.asarray([1.0e-10]),
+        niter_array=np.asarray([1000]),
+    )
+    config = implicit.make_config(inp, ftol=1.0e-10, max_iterations=1000)
+    params = implicit.params_from_input(inp)
+    state, mask = implicit.solve_implicit_with_aux(params, config)
+    runtime = implicit.runtime_from_params(params, config)
+    native = lift_high_order_state(state, runtime, degree=3)
+    adapter = build_low_order_preconditioner(
+        native,
+        params,
+        config,
+        state,
+        mask,
+        probe_chunk_size=4,
+    )
+    return make_strong_root_runtime(native, adapter, mask)
+
+
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
+def test_projection_diagnostics_match_axisymmetric_case_at_ntor_one():
+    """The 3-D angular reconstruction must reduce to the ntor=0 one.
+
+    ``strong_projection_diagnostics`` used to broadcast the raw theta and
+    zeta grids against each other when rebuilding the retained-mode phase;
+    that only typechecks when ``nzeta == 1``, so every ``nzeta > 1``
+    diagnostic crashed and the axisymmetric benchmarks never noticed.  An
+    axisymmetric state embedded at ``ntor = 1`` must report the same
+    angular/radial fit content as its genuine ``ntor = 0`` build — the
+    added zeta points and n != 0 fit directions see a zeta-constant signal.
+    """
+
+    results = []
+    for ntor in (0, 1):
+        runtime = _solved_solovev_strong_runtime(ntor)
+        chart = make_strong_structured_chart(runtime)
+        zero = np.zeros((int(chart.size),))
+        diagnostics = strong_projection_diagnostics(zero, runtime, chart)
+        assert np.all(np.isfinite(np.asarray(tuple(diagnostics))))
+        collocation = strong_collocation_residual(
+            jnp.asarray(zero), runtime, chart
+        )
+        point_count = (
+            runtime.radial_nodes.size * runtime.theta.size * runtime.zeta.size
+        )
+        np.testing.assert_allclose(
+            jnp.linalg.norm(collocation) / np.sqrt(float(point_count)),
+            diagnostics.sampled_rms,
+            rtol=2.0e-13,
+            atol=2.0e-13,
+        )
+        results.append(diagnostics)
+    axisymmetric, embedded = results
+    for name in (
+        "sampled_rms",
+        "reconstructed_rms",
+        "unresolved_rms",
+        "unresolved_fraction",
+        "angular_unresolved_fraction",
+        "radial_fit_unresolved_fraction",
+        "radial_unresolved_fraction",
+        "helical_unresolved_fraction",
+    ):
+        # The two builds run independent legacy solves, so the states agree
+        # only to the ftol floor; 1e-6 still separates correct angular
+        # bookkeeping (equal content) from a wrong flattening (O(1) off).
+        np.testing.assert_allclose(
+            np.asarray(getattr(embedded, name)),
+            np.asarray(getattr(axisymmetric, name)),
+            rtol=1.0e-6,
+            atol=1.0e-9,
+            err_msg=name,
+        )
+
+
 def test_structured_chart_mode_blocks_recover_local_jacobian(small_strong_root):
     runtime = small_strong_root
     chart = make_strong_structured_chart(runtime)
@@ -1352,7 +1439,7 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
                      "_dof_mask", "_refined_state"):
             monkeypatch.setattr(implicit, name, lambda *a, **k: native)
         monkeypatch.setattr(strong_force, "lift_high_order_state", lambda *a, **k: native)
-        monkeypatch.setattr(strong_force, "certify_strong_force", lambda *a: certificate)
+        monkeypatch.setattr(strong_force, "certify_strong_force", lambda *a, **k: certificate)
         monkeypatch.setattr(driver, "build_low_order_preconditioner", correction_required)
         run = lambda: driver.polish_legacy_solution(  # noqa: E731
             _small_solovev_input(), SimpleNamespace(ns=5), native, config=config)
@@ -1373,7 +1460,7 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
         monkeypatch.setattr(driver, "_solve_residual", lambda *a: jnp.zeros(1))
         monkeypatch.setattr(driver, "_normalized_low_residual_norm", lambda *a: 0.0)
         monkeypatch.setattr(driver, "_corrected_state", lambda *a: native)
-        monkeypatch.setattr(driver, "certify_strong_force", lambda *a: certificate)
+        monkeypatch.setattr(driver, "certify_strong_force", lambda *a, **k: certificate)
         result = driver.polish_strong_root(runtime, config=config, initial_certificate=initial)
         assert result.polish_report.converged == accepted
         assert result.polish_report.radial_refinement_tolerance == 0.001
@@ -1391,8 +1478,8 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
         monkeypatch.setattr(driver, "strong_collocation_residual", lambda *a: jnp.ones(1))
         monkeypatch.setattr(driver, "_collocation_variable_scale", lambda *a: np.ones(1))
         monkeypatch.setattr(driver, "_corrected_state", lambda *a: native)
-        monkeypatch.setattr(driver, "certify_strong_force", lambda *a: certificate)
-        monkeypatch.setattr(driver, "_gauss_newton_polish_lane", lambda *a: SimpleNamespace(
+        monkeypatch.setattr(driver, "certify_strong_force", lambda *a, **k: certificate)
+        monkeypatch.setattr(driver, "_gauss_newton_polish_lane", lambda *a, **k: SimpleNamespace(
             x=jnp.zeros(1), accepted_steps=0, rejected_steps=0, steps=1,
             linear_iterations=1, cost=0.0, gradient_norm=1.0,
             history=SimpleNamespace(gradient_norm=jnp.ones(1)),
@@ -1823,6 +1910,13 @@ def test_public_solver_auto_corrects_a_lift_that_fails_quadrature(monkeypatch):
         polish_config=PolishConfig(
             radial_degree=3,
             validation_tolerance=3.0,
+            # AUTO prices the solve from one measured linear product times
+            # the iteration limits, so the price scales with machine load:
+            # this deck priced 501 s on an idle 36-core host and 45 068 s on
+            # a loaded laptop, and the default budget then declines it.
+            # This test is about the correction of a lift that fails
+            # quadrature, not the gate, which has its own tests.
+            auto_budget_seconds=1.0e9,
         ),
     )
     assert result.converged
@@ -1939,3 +2033,218 @@ def test_polished_wout_export_certifies_near_the_native_state(tmp_path):
     # consumers: the stable default reconstruction of the file must
     # re-certify within 10% of the native continuous certificate.
     assert exported_l2 <= 1.1 * native_l2
+
+
+def _small_polish_deck():
+    """Smallest converging Solov'ev case that still builds a real chart."""
+
+    inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
+        mpol=4, ntor=0, ntheta=16, nzeta=4)
+    return dataclasses.replace(
+        inp,
+        ns_array=np.asarray([9]),
+        ftol_array=np.asarray([1.0e-11]),
+        niter_array=np.asarray([2000]),
+    )
+
+
+_BOUNDED_POLISH = dict(
+    radial_degree=3,
+    validation_tolerance=1.0e-4,
+    max_nonlinear_iterations=3,
+    linear_restart=10,
+    linear_max_restarts=2,
+    fail_policy="return_unpolished",
+)
+
+
+def test_auto_declines_a_solve_it_priced_above_its_budget():
+    """AUTO must measure the cost and refuse to spend past its ceiling.
+
+    The reported W7-X standard run spent 10 h 35 m in Gauss--Newton before
+    saying anything about whether that was worth doing.  AUTO now times one
+    inner product first, and an unaffordable prediction returns the
+    equilibrium untouched -- as a decision, not a certification failure, so
+    it never raises and never warns whatever the fail policy says.
+    """
+
+    lines: list[str] = []
+    result = solver.solve(
+        _small_polish_deck(),
+        ftol=1.0e-11,
+        max_iterations=2000,
+        polish="auto",
+        polish_config=PolishConfig(
+            auto_budget_seconds=1.0e-9,
+            fail_policy="raise",
+            **{k: v for k, v in _BOUNDED_POLISH.items() if k != "fail_policy"},
+        ),
+        verbose=True,
+        emit=lambda text, end="\n": lines.append(text),
+    )
+    report = result.polish_report
+    assert report.termination_reason == "auto-declined-cost"
+    assert report.converged is False
+    assert report.nonlinear_iterations == 0
+    assert report.linear_iterations == 0
+    assert report.seconds_per_linear_product > 0.0
+    assert report.predicted_solve_seconds > report.auto_budget_seconds
+    # The unpolished equilibrium comes back intact and uncertified.
+    assert result.native_equilibrium is not None
+    assert float(report.final_normalized_l2) == float(report.initial_normalized_l2)
+
+    console = "".join(lines)
+    assert "DECLINED ON PREDICTED COST" in console
+    # Every escape hatch is named where the decision is announced.
+    for knob in ("POLISH_BUDGET", "POLISH_MAX_ITER", "POLISH = .TRUE."):
+        assert knob in console
+
+
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
+def test_explicit_polish_never_prices_and_never_declines():
+    """``POLISH = ON`` is a request, not a proposal.
+
+    An explicit polish must not pay for the timing probe or consult the
+    budget, so an unreachable budget cannot turn it into a no-op.
+    """
+
+    lines: list[str] = []
+    result = solver.solve(
+        _small_polish_deck(),
+        ftol=1.0e-11,
+        max_iterations=2000,
+        polish=True,
+        polish_config=PolishConfig(auto_budget_seconds=1.0e-9, **_BOUNDED_POLISH),
+        verbose=True,
+        emit=lambda text, end="\n": lines.append(text),
+    )
+    console = "".join(lines)
+    assert "DECLINED" not in console
+    assert "timing one Gauss-Newton product" not in console
+    assert result.polish_report.termination_reason != "auto-declined-cost"
+    assert result.polish_report.seconds_per_linear_product is None
+    assert result.polish_report.nonlinear_iterations >= 1
+
+
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
+def test_auto_within_budget_records_the_price_it_was_allowed_on():
+    """A permitted AUTO still reports the prediction that permitted it."""
+
+    result = solver.solve(
+        _small_polish_deck(),
+        ftol=1.0e-11,
+        max_iterations=2000,
+        polish="auto",
+        polish_config=PolishConfig(
+            auto_budget_seconds=1.0e9, **_BOUNDED_POLISH),
+    )
+    report = result.polish_report
+    assert report.termination_reason != "auto-declined-cost"
+    assert report.seconds_per_linear_product > 0.0
+    assert report.predicted_solve_seconds > 0.0
+    assert report.auto_budget_seconds == 1.0e9
+
+
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
+def test_gauss_newton_progress_prints_live_and_changes_nothing():
+    """The heartbeat must reach the console mid-solve and cost no accuracy.
+
+    The rows read out of the SOLVAX history only appear once the jitted
+    while_loop returns.  The heartbeat is emitted from device callbacks
+    inside it, which run on the host outside the traced arithmetic, so the
+    solve must be bit-identical with and without it.
+    """
+
+    from vmex.core import polish_driver
+
+    inp = _small_polish_deck()
+    config = PolishConfig(**_BOUNDED_POLISH)
+    quiet = solver.solve(inp, ftol=1.0e-11, max_iterations=2000,
+                         polish=True, polish_config=config)
+    lines: list[str] = []
+    previous = polish_driver._POLISH_PROGRESS_INTERVAL_SECONDS
+    polish_driver._POLISH_PROGRESS_INTERVAL_SECONDS = 0.0
+    try:
+        loud = solver.solve(inp, ftol=1.0e-11, max_iterations=2000,
+                            polish=True, polish_config=config, verbose=True,
+                            emit=lambda text, end="\n": lines.append(text))
+    finally:
+        polish_driver._POLISH_PROGRESS_INTERVAL_SECONDS = previous
+
+    heartbeats = [
+        line for line in "".join(lines).splitlines()
+        if line.lstrip().startswith("polish 0")
+    ]
+    assert heartbeats, "no live line reached the console during the solve"
+    assert "linear products" in heartbeats[0]
+    assert float(quiet.polish_report.least_squares_cost) == float(
+        loud.polish_report.least_squares_cost)
+    np.testing.assert_array_equal(
+        np.asarray(quiet.native_equilibrium.R_cos),
+        np.asarray(loud.native_equilibrium.R_cos),
+    )
+
+
+def test_polish_config_rejects_an_unusable_budget():
+    with pytest.raises(ValueError, match="auto_budget_seconds must be positive"):
+        PolishConfig(auto_budget_seconds=0.0)
+
+
+def test_progress_callbacks_are_inert_without_an_active_reporter():
+    """The staged callbacks outlive any one polish call.
+
+    ``jax.debug.callback`` bakes its Python callable into the compiled
+    executable, which later polish calls of the same shape reuse.  The baked
+    callables therefore dispatch through a module global, and must do
+    nothing at all when no verbose polish is running rather than report into
+    a finished call's console.
+    """
+
+    from vmex.core import polish_driver
+
+    assert polish_driver._ACTIVE_POLISH_PROGRESS is None
+    polish_driver._polish_progress_product(0.0)
+    polish_driver._polish_progress_cost(1.0)
+
+    emitted: list[str] = []
+    reporter = polish_driver._PolishProgress(
+        lambda text, end="\n": emitted.append(text),
+        product_budget=4, interval=0.0)
+    with polish_driver._polish_progress(reporter):
+        assert polish_driver._ACTIVE_POLISH_PROGRESS is reporter
+        polish_driver._polish_progress_cost(2.5)
+        polish_driver._polish_progress_product(0.0)
+    assert polish_driver._ACTIVE_POLISH_PROGRESS is None
+    assert reporter.lines == 1
+    assert "1/4 linear products" in emitted[0]
+    assert "2.500E+00" in emitted[0]
+    # The throttle suppresses output, never the accounting.
+    quiet = polish_driver._PolishProgress(
+        lambda text, end="\n": emitted.append(text),
+        product_budget=4, interval=1.0e6)
+    with polish_driver._polish_progress(quiet):
+        quiet.product()
+        quiet.product()
+    assert quiet.lines == 1
+
+
+def test_declined_auto_does_not_warn_under_the_warn_fail_policy(tmp_path):
+    """``POLISH_FAIL = WARN`` reports failures, and a decline is not one."""
+
+    import warnings
+
+    from vmex.core.multigrid import solve_file
+
+    path = tmp_path / "input.declined"
+    _small_polish_deck().to_indata(path)
+    path.write_text(
+        "!@VMEX POLISH = AUTO\n"
+        "!@VMEX POLISH_BUDGET = 1.0E-9\n"
+        "!@VMEX POLISH_FAIL = WARN\n"
+        "!@VMEX POLISH_MAX_ITER = 3\n"
+        + path.read_text()
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        result = solve_file(path, write_wout=False)
+    assert result.polish_report.termination_reason == "auto-declined-cost"

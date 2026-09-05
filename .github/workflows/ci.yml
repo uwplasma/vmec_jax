@@ -216,9 +216,12 @@ jobs:
     # time in two modules: test_polish_preconditioner.py (~44 minutes of
     # call time; every polish test builds a chart and certifies) and
     # test_run_options.py (~16 minutes, mostly the polish directive).
-    # Those two now run as lane e, which drops the longest parity lane to
-    # roughly 20 minutes and leaves misc and c2 (27 and 26) as the CI wall
-    # clock.  The budget stays at 55: it is a cap, not a reservation, and
+    # Those two ran as lane e, which dropped the longest parity lane to
+    # roughly 20 minutes.  The polish tests then grew again (#269's real
+    # Solov'ev correction at 705 s, #261's AUTO pricing and heartbeat tests
+    # run real polishes) and lane e reached 25 minutes on main and timed
+    # out at 55 on #261, so test_run_options.py (~20 minutes of call time,
+    # three polish-directive solves) is lane f on its own.  The budget stays at 55: it is a cap, not a reservation, and
     # the 2026-08-31 timeout plague is not worth re-running to save a
     # number nobody reads.
     timeout-minutes: 55
@@ -243,6 +246,9 @@ jobs:
             parallel: "-n 4"
           - lane: e-polish
             selector: pr-parity-e
+            parallel: "-n 4"
+          - lane: f-options
+            selector: pr-parity-f
             parallel: "-n 4"
           - lane: c2
             selector: pr-parity-c2

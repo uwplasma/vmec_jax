@@ -68,7 +68,10 @@ def test_benchmark_scripts_import_this_checkout_from_any_cwd(
         "polish_preconditioner.py",
         "strong_certificate.py",
         "strong_polish.py",
+        "strong_polish_3d.py",
         "strong_root.py",
+        "polish_memory.py",
+        "polish_cost.py",
         "profile_resources.py",
     ):
         proc = subprocess.run(
@@ -126,6 +129,74 @@ def test_polish_preconditioner_artifact_is_clean_and_certified() -> None:
         assert case["transfer_roundtrip_relative_residual"] < 2.0e-12
         assert case["preconditioner_duality_relative_error"] < 2.0e-12
         assert case["low_block_relative_residual"] < 1.0e-10
+
+
+def test_polish_sweep_memory_artifact_shows_the_fix_it_claims() -> None:
+    """The memory record has to carry the claim, not just the run.
+
+    The polish OOM was reported, reproduced, and fixed without anything in
+    the tree recording either number.  This artifact is that record, so the
+    gate is on the comparison it exists to make: the pre-0.8.2 flat sweep
+    must still show the allocation, and the shipped policy must complete on
+    a small fraction of it.
+    """
+
+    artifact = json.loads(
+        (ROOT / "benchmarks" / "polish_memory_w7x.json").read_text()
+    )
+    assert artifact["schema"] == "vmex.polish-sweep-memory/1"
+    provenance = artifact["provenance"]
+    assert re.fullmatch(r"[0-9a-f]{40}", provenance["measurement_commit"])
+    assert provenance["measurement_dirty"] is False
+    assert provenance["input_data_embedded"] is False
+    assert provenance["x64"] is True
+    encoded = json.dumps(artifact)
+    assert "/Users/" not in encoded and "/home/" not in encoded
+
+    arms = {arm["mode"]: arm for arm in artifact["arms"]}
+    assert set(arms) == {"flat", "batched", "auto"}
+    gib = 1024.0**3
+    shipped = arms["auto"]["detail"]
+    assert arms["auto"]["completed"] is True
+    assert shipped["resolution"]["mpol"] == shipped["resolution"]["ntor"] == 10
+    assert shipped["sweep_policy"] == {
+        "batch": True,
+        "checkpoint": True,
+        "max_batch": 4096,
+        "min_batch": 128,
+        "working_set_bytes": 512 * 1024**2,
+    }
+    # The automatic batch must still land on the point count this deck was
+    # measured with, or the calibration in strong_force.py has drifted.
+    assert shipped["sweep_batch_points"] == 4096
+
+    # The forward sweep is the allocation users reported: the flat arm still
+    # reaches tens of GiB, and the shipped certificate is a small fraction
+    # of it.
+    assert arms["flat"]["peak_rss_bytes"] / gib > 16.0
+    assert shipped["certificate_peak_rss_bytes"] / gib < 8.0
+    assert (
+        arms["flat"]["peak_rss_bytes"]
+        > 4.0 * shipped["certificate_peak_rss_bytes"]
+    )
+    # The remat boundary is the reverse-mode half: batching alone leaves the
+    # chart build storing whole-grid linearization residuals.  On the
+    # measurement host that arm does not survive the chart stage at all --
+    # the record stops at "chart" with no chart peak -- which is the stronger
+    # statement; where it does survive, it must cost well over the shipped
+    # policy's chart peak.
+    batched = arms["batched"]
+    if batched["completed"]:
+        assert (
+            batched["detail"]["chart_peak_rss_bytes"]
+            > 1.5 * shipped["chart_peak_rss_bytes"]
+        )
+    else:
+        assert batched["detail"]["stage"] == "chart"
+        assert "chart_peak_rss_bytes" not in batched["detail"]
+    assert "polish_memory_w7x.json" in (
+        ROOT / "docs" / "reference" / "performance.rst"
+    ).read_text()
 
 
 def test_collocation_polish_derivative_artifact_is_clean_and_certified() -> None:

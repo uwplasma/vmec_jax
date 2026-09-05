@@ -7,6 +7,31 @@ in the pull-request and release bodies and are being backfilled as
 
 ## Unreleased
 
+- Polish memory at production stellarator resolution: the independent
+  force sweep now sizes its point batches from the problem's own mode
+  table and radial basis instead of a constant tuned on one deck, and
+  checkpoints the per-point kernel so reverse-mode passes stay per-batch.
+  On the W7-X standard configuration (`MPOL = NTOR = 10`, `ns = 51`) the
+  initial certificate falls from a single 34 GB allocation to 3.0 GiB
+  peak RSS, and the full polish setup completes where it was previously
+  killed by the OS. Measured in `benchmarks/polish_memory.py` with the
+  pre-fix sweep as one of its arms.
+- Polish observability, part two: the Gauss-Newton phase now prints while
+  it runs. The per-iteration rows added in #243 are read out of the solver
+  history after the jitted loop returns, which at production resolution
+  meant ten hours of silence; a device callback on the inner linear
+  products now emits a throttled progress line, verified bit-identical to
+  the unreported solve.
+- `POLISH = AUTO` prices the solve before committing to it: it times one
+  Gauss-Newton linear product on the problem at hand, and if the iteration
+  limits allow more than `POLISH_BUDGET` (new directive, `--polish-budget`,
+  default 3600 s) it reports what it measured, returns the equilibrium
+  unpolished, and names the knobs that override the decision. `POLISH = ON`
+  never measures and never declines.
+- README states where polishing is effective: every certified case is
+  axisymmetric, and the two 3-D measurements (a QA deck at `MPOL = NTOR = 5`
+  and the W7-X standard configuration) are quoted with their budgets and
+  their certificate outcomes in `benchmarks/polish3d_tuning.md`.
 - Polish observability: the CLI announces every polish phase (state
   refinement, initial certificate, preconditioner and chart build, compile
   notice), prints one row per Gauss-Newton iteration, and closes with a

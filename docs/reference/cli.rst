@@ -107,6 +107,13 @@ Options
    * - ``--polish-spans N``
      - Radial B-spline spans of the polished representation
        (default: derived from the solve resolution, at most 32).
+   * - ``--polish-budget SECONDS``
+     - Wall-clock ceiling ``--polish auto`` will commit to.  AUTO times one
+       Gauss-Newton linear product on the problem at hand, multiplies by the
+       iteration limits, and returns the equilibrium unpolished if the
+       result exceeds this (:class:`vmex.PolishConfig`
+       ``auto_budget_seconds``, default 3600).  ``--polish true`` never
+       consults it.
    * - ``--restart WOUT``
      - Hot-restart the solve from a ``wout_*.nc`` file (VMEX- or
        VMEC2000-written): the equilibrium state is rebuilt from the file,

@@ -2520,6 +2520,7 @@ def _polish_solve_result(
         result.state,
         config=polish_config,
         lconm1=lconm1,
+        auto=polish == "auto",
         verbose=verbose,
         emit=emit,
     )

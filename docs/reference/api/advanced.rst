@@ -38,7 +38,14 @@ High-order correction transfer and preconditioner
 
 Both :func:`vmex.solve` and :func:`vmex.solve_multigrid` accept
 ``polish_force_balance=False`` (unchanged behavior), ``True`` (required
-correction), or ``"auto"`` (skip an already-certified state). The shorter
+correction), or ``"auto"``.  ``"auto"`` skips an already-certified state,
+and additionally times one Gauss--Newton linear product before committing
+to the solve: if the configured iteration limits could run past
+``PolishConfig.auto_budget_seconds`` (``POLISH_BUDGET``,
+``--polish-budget``, default 3600 s) it reports the measurement, returns
+the equilibrium unpolished and uncertified, and names the knobs that
+override the decision.  It never raises, because nothing was attempted.
+``True`` never measures and never declines. The shorter
 ``polish`` keyword remains an alias on the single-grid call. A standard VMEC
 solve never polishes unless the caller explicitly requests it. A standard
 VMEC deck enables the same path with comment directives that VMEC2000 ignores::
@@ -49,6 +56,7 @@ VMEC deck enables the same path with comment directives that VMEC2000 ignores::
    !@VMEX POLISH_DEGREE = 5
    !@VMEX POLISH_MAX_ITER = 40
    !@VMEX POLISH_SPANS = 16
+   !@VMEX POLISH_BUDGET = 3600
 
 (the original single-flag spelling ``! VMEX: POLISH_FORCE_BALANCE = .TRUE.``
 still parses).  Directives are execution metadata, owned by
@@ -75,6 +83,25 @@ projected state, while the continuous solution remains in
 (:func:`vmex.core.polish_driver.polished_wout_ns`): on the solve mesh the
 stable wout reconstruction cannot resolve the between-node correction, so a
 solve-resolution export would silently discard most of the certified gain.
+
+Validated scope
+^^^^^^^^^^^^^^^
+
+Every case VMEX ships as a *certified* polish is axisymmetric
+(``NTOR = 0``).  No 3-D deck has yet passed the independent certificate, and
+the limit measured so far is cost rather than a demonstrated impossibility:
+on the W7-X standard configuration (``MPOL = NTOR = 10``, ``ns = 51``) one
+Gauss--Newton iteration takes about 1.75 h on 36 CPU cores, so the iteration
+count that produced the one substantial 3-D improvement — a 40% reduction in
+independent force error on a ``MPOL = NTOR = 5`` QA deck, which still failed
+the certificate — is a multi-day run at production resolution.  This is what
+``POLISH = AUTO`` measures and declines on.  The runs, their budgets, and
+their certificates are recorded in ``benchmarks/polish3d_tuning.md``.
+
+The certificate's ``normalized_l2`` divides the force error by the local
+force scale ``|JxB| + |grad p|``.  On a vacuum or near-vacuum deck both terms
+vanish and the ratio saturates at its ceiling of 2 whatever the equilibrium
+quality, so on such decks read the dimensional ``absolute_l2`` instead.
 
 The public primal path solves the overdetermined physical collocation residual
 with SOLVAX Gauss--Newton and accepts it only after independent force,

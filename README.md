@@ -351,7 +351,21 @@ converged final stage to degree-3 clamped radial B-splines (about one span per
 two radial points, at most 32), returns at once if that lifted state already
 passes the independent certificate (volume L2 at or below `1.0E-2`), and
 otherwise runs up to 80 Gauss-Newton iterations at relative tolerance `1.0E-3`.
-`ON` runs the same path; `OFF` is the default. The other directives map onto `PolishConfig`:
+`OFF` is the default.
+
+`AUTO` and `ON` differ in one further way. Before committing to the
+Gauss-Newton phase, `AUTO` times one of its linear products on your problem
+and your machine and multiplies by the iteration limits you configured. If
+that worst case is longer than `POLISH_BUDGET`, it prints what it measured,
+returns the equilibrium unpolished and uncertified, and names the knobs that
+change the decision; it never raises, because nothing was attempted. `ON`
+never measures and never declines.
+
+The default one-hour budget admits every case polishing is shipped and
+claimed on, all of which are axisymmetric, and declines a 3-D deck at
+production resolution — which matches the scope described below rather than
+contradicting it. Use `POLISH = ON`, or raise `POLISH_BUDGET`, to ask for one
+deliberately. The other directives map onto `PolishConfig`:
 
 | Directive | Meaning | Default |
 |---|---|---|
@@ -360,10 +374,12 @@ otherwise runs up to 80 Gauss-Newton iterations at relative tolerance `1.0E-3`.
 | `POLISH_DEGREE = 3 \| 5 \| 7` | radial B-spline degree (`radial_degree`) | `3` |
 | `POLISH_SPANS` | radial spans of the polished basis (`radial_spans`) | resolution-derived, at most 32 |
 | `POLISH_MAX_ITER` | Gauss-Newton iteration cap (`max_nonlinear_iterations`) | `80` |
+| `POLISH_BUDGET` | wall-clock ceiling `AUTO` will commit to, seconds (`auto_budget_seconds`) | `3600` |
 | `POLISH_FAIL = ERROR \| FALLBACK \| WARN` | failed polish: raise, return unpolished, or warn | `ERROR` |
 
 The CLI mirrors every directive (`--polish`, `--polish-tol`, `--polish-degree`,
-`--polish-spans`, `--polish-max-iter`, `--polish-fail`, `--no-polish`) with
+`--polish-spans`, `--polish-max-iter`, `--polish-budget`, `--polish-fail`,
+`--no-polish`) with
 precedence `CLI flag > Python keyword > file directive > package default`; an
 explicit `polish_config` in Python wins over all scalar knobs. A CLI run
 announces each polish phase, prints one row per Gauss-Newton iteration, and
@@ -448,6 +464,43 @@ that panel does not show this gain.
 
 The raw comparison data, source revisions, resolutions, timing boundaries, and
 certificate refinements are recorded in `benchmarks/`.
+
+### Where polishing is effective today
+
+Every case VMEX ships as a *certified* polish is axisymmetric (`NTOR = 0`).
+No 3-D deck has yet passed the independent certificate, and the reason is
+cost, not a discovered impossibility. The evidence, all of it in
+`benchmarks/polish3d_tuning.md` with the raw records beside it:
+
+| deck | resolution | Gauss-Newton budget spent | independent force L2 | certificate |
+|---|---|---|---|---|
+| `input.shaped_tokamak_pressure_polished` | `MPOL 5`, `NTOR 0`, `ns 31` | minutes | see the figure above | **certified** |
+| `input.nfp2_QA_smooth_beta` | `MPOL 5`, `NTOR 5`, `ns 25` | 40 iterations x 600 linear, 5 h 22 m | `3.43e4` -> `2.04e4` (-40%) | declined |
+| W7-X standard (not bundled) | `MPOL 10`, `NTOR 10`, `ns 51` | 6 iterations x 150 linear, 11 h 09 m | `4.33e6` -> `4.28e6` (-1.1%) | declined |
+
+Read the last two rows together. The 3-D QA case improves its independent
+force error substantially and still fails the certificate, so a large gain
+there is not yet a certified equilibrium. The W7-X row improved much less,
+but it was also given a far smaller budget: six Gauss-Newton iterations
+against the QA case's forty, and 150 linear iterations per step against 600.
+The two are therefore not a controlled comparison, and the W7-X row is
+evidence about **price**, not about futility - one Gauss-Newton iteration at
+`MPOL = NTOR = 10` costs about 1.75 h on a 36-core CPU, so a QA-like
+iteration count at that resolution is a multi-day run. Whether it would
+certify at that budget is not known; this README does not claim either way.
+
+Two consequences for anyone using the feature:
+
+- Polishing a production-resolution stellarator is not something to start
+  casually. `POLISH = AUTO` now prices the solve first and declines rather
+  than silently spending the night. Asking for it anyway is deliberate:
+  either raise `POLISH_BUDGET` past the reported prediction, or use
+  `POLISH = ON`, which never prices and never declines.
+- The certificate's `normalized_l2` is a *ratio* of the force error to the
+  local force scale. On a vacuum or near-vacuum deck - the W7-X standard
+  configuration among them - both terms of that scale vanish and the ratio
+  saturates at its ceiling of 2 regardless of how good the equilibrium is.
+  Use the dimensional `absolute_l2` on such decks, as the table above does.
 
 ## Equilibrium and kinetic diagnostics
 

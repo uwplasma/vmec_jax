@@ -12,6 +12,9 @@ Every Fourier amplitude is represented as ``rho**abs(m) q(s)``.
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -588,24 +591,137 @@ def evaluate_high_order_surface(
     )
 
 
-@jax.jit
-def evaluate_strong_force(
+#: Bytes the flat sweep materializes per evaluation point, per retained
+#: Fourier mode and per radial basis function.  ``_point_force`` carries the
+#: per-point spectral intermediates (order ``mnmax * nbasis`` doubles)
+#: through two nested ``jacfwd`` levels over the three coordinates, so the
+#: live set is about three float64 copies of that table per point.  On the
+#: W7-X standard configuration (``MPOL = NTOR = 10``: ``mnmax = 200``,
+#: ``nbasis = 27``) this predicts 130 kB/point, and the flat sweep over the
+#: ~2.5e5-point certificate grid did request a single 34 GB allocation —
+#: the polish OOM users hit.
+_FORCE_POINT_BYTES_PER_MODE_BASIS = 3 * 8
+
+#: Working-set target for one batch of the sweep.  Calibrated, not invented:
+#: 4096 points is the batch measured to carry the W7-X certificate and chart
+#: build to completion, and 4096 * 130 kB is 0.5 GiB.  Holding the *working
+#: set* fixed rather than the point count is what makes the batch automatic:
+#: a larger mode table buys fewer points per batch, so decks past W7-X do not
+#: walk back into the same allocation with a hand-tuned constant.
+_FORCE_SWEEP_WORKING_SET_BYTES = 512 * 1024**2
+
+#: Batch bounds.  The lower bound keeps the sweep vectorized enough to be
+#: worth compiling; the upper bound is the measured W7-X batch, so every deck
+#: at or below that resolution keeps exactly the behavior shipped in 0.8.1
+#: and only larger mode tables see a smaller batch.
+_FORCE_SWEEP_MIN_BATCH = 128
+_FORCE_SWEEP_MAX_BATCH = 4096
+
+
+@dataclass(frozen=True)
+class ForceSweepPolicy:
+    """How the strong-force point sweep trades memory against speed.
+
+    ``batch`` False restores the single flat ``vmap`` over every point — the
+    pre-0.8.2 sweep, kept only so a benchmark can measure what the batching
+    fixed.  ``checkpoint`` False batches the sweep but drops the remat
+    boundary, isolating the reverse-mode half of the same problem.
+    Production always uses the defaults.
+    """
+
+    working_set_bytes: int = _FORCE_SWEEP_WORKING_SET_BYTES
+    min_batch: int = _FORCE_SWEEP_MIN_BATCH
+    max_batch: int = _FORCE_SWEEP_MAX_BATCH
+    batch: bool = True
+    checkpoint: bool = True
+
+
+_FORCE_SWEEP_POLICY = ForceSweepPolicy()
+
+#: The batched sweep carries a remat boundary around the per-point kernel.
+#: ``jax.linearize``/``jax.vjp`` through the sweep otherwise store the whole
+#: grid's linearization residuals — ~40 GB for the W7-X polish setup's
+#: 6.8e4-point chart probes, the second half of the same OOM.  With the
+#: checkpoint, reverse passes replay the per-point force kernel instead of
+#: storing its intermediates: memory falls to per-batch scale for one extra
+#: forward evaluation per backward pass.  The flat small-grid path is
+#: untouched, so optimization-loop gradients keep their exact cost.
+_point_force_checkpoint = jax.checkpoint(_point_force)
+
+
+def force_sweep_policy() -> ForceSweepPolicy:
+    """Return the sweep policy the next force evaluation will use."""
+
+    return _FORCE_SWEEP_POLICY
+
+
+@contextmanager
+def force_sweep_measurement(policy: ForceSweepPolicy) -> Iterator[ForceSweepPolicy]:
+    """Run a block under a non-default sweep policy (measurement only).
+
+    The policy is read while tracing, so already-compiled executables would
+    otherwise keep the previous plan.  Entering and leaving therefore clears
+    the JAX compilation caches: correct, and far too expensive for anything
+    but a benchmark deliberately comparing sweep strategies.
+    """
+
+    global _FORCE_SWEEP_POLICY
+    previous = _FORCE_SWEEP_POLICY
+    jax.clear_caches()
+    _FORCE_SWEEP_POLICY = policy
+    try:
+        yield policy
+    finally:
+        _FORCE_SWEEP_POLICY = previous
+        jax.clear_caches()
+
+
+def force_sweep_batch(
+    state: HighOrderEquilibriumState,
+    point_count: int,
+    policy: ForceSweepPolicy | None = None,
+) -> int:
+    """Points per sweep batch for this problem size; 0 means one flat sweep.
+
+    The batch is whatever holds one batch's spectral working set at
+    :data:`_FORCE_SWEEP_WORKING_SET_BYTES`, clamped to the measured bounds.
+    A grid that already fits stays on the flat ``vmap`` so small solves and
+    optimization-loop gradients are untouched.
+    """
+
+    policy = _FORCE_SWEEP_POLICY if policy is None else policy
+    if not policy.batch:
+        return 0
+    modes = int(np.asarray(state.m).size)
+    basis = int(state.radial_basis.size)
+    per_point = max(_FORCE_POINT_BYTES_PER_MODE_BASIS * modes * basis, 1)
+    batch = int(policy.working_set_bytes) // per_point
+    batch = min(max(batch, int(policy.min_batch)), int(policy.max_batch))
+    return 0 if int(point_count) <= batch else batch
+
+
+@functools.partial(jax.jit, static_argnames=("batch_size", "checkpoint"))
+def _evaluate_strong_force(
     state: HighOrderEquilibriumState,
     rho: Array,
     theta: Array,
     zeta: Array,
+    *,
+    batch_size: int,
+    checkpoint: bool,
 ) -> StrongForceSamples:
-    """Evaluate the independent continuum force on broadcast-compatible points.
-
-    Points on the coordinate-singular magnetic axis are intentionally excluded;
-    use a shifted radial quadrature as :func:`certify_strong_force` does.
-    Compilation is cached by basis metadata and broadcast point shape.
-    """
-
     rho, theta, zeta = jnp.broadcast_arrays(rho, theta, zeta)
     shape = rho.shape
     points = jnp.stack((rho.reshape(-1), theta.reshape(-1), zeta.reshape(-1)), axis=-1)
-    values = jax.vmap(lambda point: _point_force(state, point))(points)
+    if batch_size <= 0:
+        values = jax.vmap(lambda point: _point_force(state, point))(points)
+    else:
+        kernel = _point_force_checkpoint if checkpoint else _point_force
+        values = jax.lax.map(
+            lambda point: kernel(state, point),
+            points,
+            batch_size=batch_size,
+        )
 
     def reshape_scalar(value: Array) -> Array:
         return value.reshape(shape)
@@ -629,6 +745,35 @@ def evaluate_strong_force(
         signed_helical_force_density=reshape_scalar(values[9]),
         lorentz_norm=reshape_scalar(values[10]),
         grad_pressure_norm=reshape_scalar(values[11]),
+    )
+
+
+def evaluate_strong_force(
+    state: HighOrderEquilibriumState,
+    rho: Array,
+    theta: Array,
+    zeta: Array,
+) -> StrongForceSamples:
+    """Evaluate the independent continuum force on broadcast-compatible points.
+
+    Points on the coordinate-singular magnetic axis are intentionally excluded;
+    use a shifted radial quadrature as :func:`certify_strong_force` does.
+    Compilation is cached by basis metadata, broadcast point shape, and the
+    sweep plan :func:`force_sweep_batch` derives from them; the plan changes
+    only how the identical per-point kernel is scheduled, so values and
+    derivatives do not depend on it.
+    """
+
+    shape = np.broadcast_shapes(jnp.shape(rho), jnp.shape(theta), jnp.shape(zeta))
+    count = int(np.prod(shape, dtype=np.int64)) if shape else 1
+    batch_size = force_sweep_batch(state, count)
+    return _evaluate_strong_force(
+        state,
+        rho,
+        theta,
+        zeta,
+        batch_size=batch_size,
+        checkpoint=bool(_FORCE_SWEEP_POLICY.checkpoint),
     )
 
 
@@ -1235,12 +1380,16 @@ def plot_strong_force_report(
 __all__ = [
     "FORCE_ERROR_MEASURE_LABELS",
     "ForceErrorNormalizations",
+    "ForceSweepPolicy",
     "HighOrderEquilibriumState",
     "HighOrderFieldSamples",
     "HighOrderSurfaceSamples",
     "StrongForceReport",
     "StrongForceSamples",
     "certify_strong_force",
+    "force_sweep_batch",
+    "force_sweep_measurement",
+    "force_sweep_policy",
     "evaluate_high_order_fields",
     "evaluate_high_order_surface",
     "evaluate_magnetic_pressure_gradient",

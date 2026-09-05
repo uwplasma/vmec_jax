@@ -140,6 +140,44 @@ halving.  This is a correctness and overhead gate for the production
 mathematical formulation at structural resolution, not a production-size
 optimization timing claim.
 
+Polish memory at production stellarator resolution
+--------------------------------------------------
+
+``benchmarks/polish_memory.py`` runs the polish setup three times on one
+build, changing only how the independent force sweep is scheduled, and
+records each arm's peak resident memory from ``os.wait4`` so an arm the OS
+kills still reports one.  The record is
+``benchmarks/polish_memory_w7x.json``, measured on the W7-X standard
+configuration (``MPOL = NTOR = 10``, ``ns`` 13/25/51) — the resolution at
+which polishing was reported to run out of memory.
+
+The ``flat`` arm is the pre-0.8.2 sweep: one ``vmap`` over every evaluation
+point, which asks for a single 34 GB allocation on the first certificate —
+34.3 GiB peak resident on the 36-core, 62 GB office host, after which the
+arm is killed building the chart.  ``batched`` schedules the same per-point
+kernel in automatically sized batches: its certificate peaks at 3.0 GiB,
+but without checkpointing the chart build still stores whole-grid
+linearization residuals and the arm dies there too (a single 79 GB
+allocation).  ``auto`` is the shipped policy, which additionally checkpoints
+the kernel so reverse-mode passes stay per-batch: 3.0 GiB at the
+certificate, 15.4 GiB at the chart, and it completes.  Values and
+derivatives agree across all three to round-off of each field's scale
+(2e-12 of max|J| for the current density, whose near-zero entries in a
+vacuum field are pure cancellation); only the schedule differs.  This is a memory record, not a runtime claim:
+the batched arms trade a modest amount of time for the memory, and the wall
+times in the record include that trade.
+
+Polish cost prediction
+----------------------
+
+``benchmarks/polish_cost.py`` records, per deck, what one Gauss--Newton
+linear product costs and what the configured iteration limits therefore
+allow in the worst case.  These are the measurements behind
+``PolishConfig.auto_budget_seconds`` — the ceiling ``POLISH = AUTO`` prices
+a solve against before committing to it — and they are machine-specific by
+design, which is why AUTO measures at run time rather than consulting a
+size heuristic.  The record is ``benchmarks/polish_cost_office.json``, measured on the 36-core office host at driver defaults (80 nonlinear × 600 linear): the shaped tokamak prices at 1 126 s and the bundled Solov'ev at 501 s, both inside the default 3 600 s budget, while the finite-beta QA case prices at 87 848 s and is the deck AUTO turns away.
+
 Benchmark suite (CPU, ns = 201)
 -------------------------------
 

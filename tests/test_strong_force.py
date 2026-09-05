@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import replace
 import json
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -323,6 +324,118 @@ def test_point_force_jvp_with_respect_to_high_order_coefficients():
     assert np.all(np.isfinite(primal))
     assert np.all(np.isfinite(derivative))
     assert float(jnp.linalg.norm(derivative)) > 0.0
+
+
+def test_batched_point_sweep_matches_flat_vmap_values_and_gradients():
+    """``lax.map`` batching must not change force values or derivatives.
+
+    The sweep switched from one flat ``vmap`` to ``lax.map`` batches so the
+    W7-X-scale certificate (2.5e5 points at ``mnmax = 200``) stops
+    allocating tens of GB at once.  Per-point results are independent, so
+    a small forced batch must reproduce the flat path exactly, primal and
+    reverse-mode alike (37 points against batch 8 exercises the remainder
+    chunk).
+    """
+
+    from vmex.core import strong_force as sf
+
+    state = _constant_toroidal_field_state()
+    generator = np.random.default_rng(7)
+    count = 37
+    rho = jnp.asarray(generator.uniform(0.05, 0.95, count))
+    theta = jnp.asarray(generator.uniform(0.0, 2.0 * np.pi, count))
+    zeta = jnp.asarray(generator.uniform(0.0, 2.0 * np.pi, count))
+    weights = jnp.asarray(generator.normal(size=(count, 3)))
+    probe = jnp.zeros_like(state.R_cos).at[1, 1].set(1.0)
+
+    def objective(delta):
+        perturbed = replace(state, R_cos=state.R_cos + delta * probe)
+        samples = sf.evaluate_strong_force(perturbed, rho, theta, zeta)
+        return jnp.sum(samples.force * weights)
+
+    flat_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
+    flat_value, flat_grad = jax.value_and_grad(objective)(0.0)
+
+    forced = sf.ForceSweepPolicy(min_batch=8, max_batch=8)
+    with sf.force_sweep_measurement(forced):
+        assert sf.force_sweep_batch(state, count) == 8
+        batched_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
+        batched_value, batched_grad = jax.value_and_grad(objective)(0.0)
+    assert sf.force_sweep_policy().batch is True
+    # The remat boundary is a memory strategy, not a numerical one: dropping
+    # it must reproduce the same values and the same reverse-mode gradient.
+    # The memory benchmark runs this arm, so it has to be exact too.
+    with sf.force_sweep_measurement(
+            sf.ForceSweepPolicy(min_batch=8, max_batch=8, checkpoint=False)):
+        plain_samples = sf.evaluate_strong_force(state, rho, theta, zeta)
+        plain_value, plain_grad = jax.value_and_grad(objective)(0.0)
+    np.testing.assert_array_equal(
+        np.asarray(plain_samples.force), np.asarray(batched_samples.force))
+    np.testing.assert_allclose(plain_value, batched_value, rtol=1.0e-13)
+    np.testing.assert_allclose(plain_grad, batched_grad, rtol=1.0e-11)
+
+    # Batching changes the fusion XLA picks, so the two sweeps agree to
+    # round-off of each field's own scale, not element by element: the
+    # current density is a curl of B built from nested derivatives, and its
+    # near-zero entries in a vacuum field are pure cancellation (2e-12 of
+    # max|J| on Apple silicon, and a different 2e-12 on the x86 runner).
+    for name in flat_samples.__dataclass_fields__:
+        flat = np.asarray(getattr(flat_samples, name))
+        scale = float(np.max(np.abs(flat))) if flat.dtype.kind == "f" else 0.0
+        np.testing.assert_allclose(
+            np.asarray(getattr(batched_samples, name)),
+            flat,
+            rtol=1.0e-12,
+            atol=1.0e-11 * max(scale, 1.0),
+            err_msg=name,
+        )
+    np.testing.assert_allclose(batched_value, flat_value, rtol=1.0e-12)
+    np.testing.assert_allclose(batched_grad, flat_grad, rtol=1.0e-11)
+    assert float(np.abs(np.asarray(flat_grad))) > 0.0
+
+
+def test_sweep_batch_holds_the_working_set_as_the_mode_table_grows():
+    """The batch must fall with problem size, not stay a tuned constant.
+
+    A fixed 4096-point batch was measured on the W7-X standard deck
+    (``mnmax = 200``, 27 radial basis functions).  The same constant at a
+    larger mode table would multiply the per-batch working set back up,
+    which is the allocation that OOM-killed the user's run in the first
+    place, so the batch is derived from the working set instead.  The
+    W7-X-scale answer must still be the measured 4096, and every batch must
+    hold the target working set.
+    """
+
+    from vmex.core import strong_force as sf
+
+    def batch_for(modes: int, basis: int) -> int:
+        # force_sweep_batch reads only the mode table and the basis size;
+        # standing those in keeps the case list at resolutions no test
+        # machine could afford to build a real state for.
+        sized = SimpleNamespace(
+            m=np.zeros(modes, dtype=int),
+            radial_basis=SimpleNamespace(size=basis),
+        )
+        return sf.force_sweep_batch(sized, point_count=10**7)
+
+    w7x = batch_for(200, 27)
+    assert w7x == sf._FORCE_SWEEP_MAX_BATCH == 4096
+    bigger = batch_for(528, 40)
+    assert bigger < w7x
+    for modes, basis in ((200, 27), (528, 40), (1200, 64)):
+        working_set = (
+            batch_for(modes, basis)
+            * sf._FORCE_POINT_BYTES_PER_MODE_BASIS
+            * modes
+            * basis
+        )
+        assert working_set <= sf._FORCE_SWEEP_WORKING_SET_BYTES
+    # Small grids stay on the flat sweep: optimization-loop gradients keep
+    # the exact cost they had before batching existed.
+    small = _constant_toroidal_field_state()
+    assert sf.force_sweep_batch(small, point_count=64) == 0
+    with sf.force_sweep_measurement(sf.ForceSweepPolicy(batch=False)):
+        assert sf.force_sweep_batch(small, point_count=10**7) == 0
 
 
 def test_overintegrated_certificate_reports_dimensional_and_normalized_force():

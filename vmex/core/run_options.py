@@ -16,6 +16,7 @@ Two directive spellings are accepted, both VMEC-safe comments::
     !@VMEX POLISH_DEGREE = 5
     !@VMEX POLISH_MAX_ITER = 40
     !@VMEX POLISH_SPANS = 16
+    !@VMEX POLISH_BUDGET = 3600
 
 and the original single-flag form from the polishing integration::
 
@@ -82,6 +83,10 @@ class RunOptions:
     ``polish_fail`` maps onto the driver's fail policy: ``"error"`` raises,
     ``"fallback"`` returns the unpolished state silently, ``"warn"`` returns
     it with a :class:`RuntimeWarning`.
+    ``polish_budget`` is the wall-clock ceiling in seconds that ``POLISH =
+    AUTO`` will commit to (``auto_budget_seconds``); it raises or lowers the
+    cost at which AUTO declines to polish and has no effect on ``POLISH =
+    ON``, which never consults it.
     """
 
     polish: bool | str = False
@@ -90,6 +95,7 @@ class RunOptions:
     polish_degree: int | None = None
     polish_max_iter: int | None = None
     polish_spans: int | None = None
+    polish_budget: float | None = None
 
     def __post_init__(self) -> None:
         if self.polish not in _POLISH_MODES:
@@ -112,6 +118,9 @@ class RunOptions:
         if self.polish_spans is not None and self.polish_spans < 1:
             raise VmecInputError(
                 f"POLISH_SPANS must be positive, got {self.polish_spans!r}")
+        if self.polish_budget is not None and not self.polish_budget > 0.0:
+            raise VmecInputError(
+                f"POLISH_BUDGET must be positive, got {self.polish_budget!r}")
 
 
 @dataclass(frozen=True)
@@ -145,6 +154,13 @@ def _parse_directive_value(key: str, token: str) -> tuple[str, Any]:
         except ValueError as error:
             raise VmecInputError(
                 f"POLISH_TOL must be a real number, got {token!r}") from error
+    if key == "POLISH_BUDGET":
+        try:
+            return "polish_budget", float(token.rstrip(","))
+        except ValueError as error:
+            raise VmecInputError(
+                f"POLISH_BUDGET must be a real number, got {token!r}"
+            ) from error
     if key == "POLISH_FAIL":
         return "polish_fail", token.strip().lower()
     if key in ("POLISH_DEGREE", "POLISH_MAX_ITER", "POLISH_SPANS"):
@@ -228,6 +244,8 @@ def format_indata_directives(options: RunOptions) -> str:
         lines.append(f"!@VMEX POLISH_MAX_ITER = {options.polish_max_iter}")
     if options.polish_spans is not None:
         lines.append(f"!@VMEX POLISH_SPANS = {options.polish_spans}")
+    if options.polish_budget is not None:
+        lines.append(f"!@VMEX POLISH_BUDGET = {options.polish_budget:.6E}")
     return "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -264,6 +282,7 @@ def resolve_run_options(
     polish_degree: int | None = None,
     polish_max_iter: int | None = None,
     polish_spans: int | None = None,
+    polish_budget: float | None = None,
 ) -> tuple[RunOptions, dict[str, str]]:
     """Apply the documented precedence and record where each value came from.
 
@@ -282,7 +301,8 @@ def resolve_run_options(
     overrides = {"polish": polish, "polish_tol": polish_tol,
                  "polish_fail": polish_fail, "polish_degree": polish_degree,
                  "polish_max_iter": polish_max_iter,
-                 "polish_spans": polish_spans}
+                 "polish_spans": polish_spans,
+                 "polish_budget": polish_budget}
     updates = {name: value for name, value in overrides.items()
                if value is not None}
     if updates:
@@ -310,6 +330,8 @@ def polish_config_from_options(options: RunOptions, base: Any = None) -> Any:
         updates["max_nonlinear_iterations"] = options.polish_max_iter
     if options.polish_spans is not None:
         updates["radial_spans"] = options.polish_spans
+    if options.polish_budget is not None:
+        updates["auto_budget_seconds"] = options.polish_budget
     if options.polish_fail in ("fallback", "warn"):
         updates["fail_policy"] = "return_unpolished"
     if not updates:

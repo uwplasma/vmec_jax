@@ -254,6 +254,36 @@ POLISH_SCREEN_HEADER = (
 )
 
 
+def polish_progress_line(
+    *,
+    elapsed_seconds: float,
+    products: int,
+    product_budget: int,
+    cost: float,
+) -> str:
+    """One live heartbeat from inside the jitted Gauss--Newton solve.
+
+    The Gauss--Newton loop is a single ``lax.while_loop``, so its per-step
+    table (:func:`polish_screen_line`) can only print once the solve returns.
+    At production stellarator resolution that window is hours long, which
+    reads as a hang.  This line is emitted from a device callback on the
+    matrix-free normal-equation products instead, so the console advances
+    while the solve runs.  ``products`` counts those applications and
+    ``product_budget`` is ``max_steps * linear_max_steps`` — the worst case,
+    not a prediction, so the percentage only ever overstates what remains.
+    """
+
+    total = max(int(product_budget), 1)
+    done = int(products)
+    hours, remainder = divmod(max(float(elapsed_seconds), 0.0), 3600.0)
+    minutes, seconds = divmod(remainder, 60.0)
+    return (
+        f"  polish {int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+        f"  {done}/{total} linear products ({100.0 * done / total:4.1f}%)"
+        f"  cost {float(cost):10.3E}\n"
+    )
+
+
 def polish_screen_line(
     iteration: int,
     cost: float,
@@ -320,6 +350,50 @@ def force_error_rows(
             f"[{float(window[0]):.2f}, {float(window[1]):.2f}])"
         )
     return tuple(rows)
+#: ``termination_reason`` of a polish AUTO declined on predicted cost.  The
+#: caller-visible marker for "measured, not attempted, not failed".
+POLISH_AUTO_DECLINED = "auto-declined-cost"
+
+
+def polish_cost_decline(
+    *,
+    seconds_per_product: float,
+    products: int,
+    predicted_seconds: float,
+    budget_seconds: float,
+    chart_size: int,
+    residual_rows: int,
+) -> str:
+    """Explain an AUTO decline in the numbers that produced it.
+
+    An automatic mode that silently spends eleven hours is worse than one
+    that does nothing, so the decline states what was measured on this
+    machine, what it implies, and every knob that changes the outcome --
+    including the one that simply overrules it.
+    """
+
+    def clock(seconds: float) -> str:
+        if seconds < 90.0:
+            return f"{seconds:.3G} s"
+        if seconds < 5400.0:
+            return f"{seconds / 60.0:.0f} min"
+        if seconds < 172800.0:
+            return f"{seconds / 3600.0:.1f} h"
+        return f"{seconds / 86400.0:.1f} days"
+
+    return (
+        "\n POLISH AUTO: DECLINED ON PREDICTED COST\n"
+        f"  collocation {int(residual_rows)} rows, {int(chart_size)} unknowns;"
+        f" one Gauss-Newton linear product measured at"
+        f" {float(seconds_per_product):.3G} s\n"
+        f"  the configured iteration limits allow {int(products)} products,"
+        f" so the solve could run {clock(float(predicted_seconds))}"
+        f" against an AUTO budget of {clock(float(budget_seconds))}\n"
+        "  the equilibrium is returned unpolished, unchanged and uncertified\n"
+        "  raise the ceiling with !@VMEX POLISH_BUDGET = <seconds>, shorten"
+        " the solve with !@VMEX POLISH_MAX_ITER = <n>,\n"
+        "  or run it regardless with !@VMEX POLISH = .TRUE.\n"
+    )
 
 
 def polish_certificate_summary(
