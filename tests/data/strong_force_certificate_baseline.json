@@ -4,7 +4,7 @@
       "absolute_l2": "0x1.373d6193716afp+16",
       "absolute_linf": "0x1.56581da92711dp+16",
       "absolute_p99": "0x1.55bf3d414e362p+16",
-      "angular_spectral_tail": "0x1.223f3adb55f09p-5",
+      "angular_spectral_tail": "0x1.767127c056ef4p-14",
       "arrays": {
         "flux_surface_average": {
           "sha256": "8b7dec5eb828deaae44869c057453bce6280deffa59af363058802c7e24eb17b",
@@ -28,7 +28,7 @@
       "helical_normalized_l2": "0x1.6a09e667f3b55p+0",
       "minimum_signed_jacobian": "0x1.228f971b949d2p+3",
       "near_axis_l2": "0x1.36db26a69f7d9p+16",
-      "nestedness_margin": "0x1.228f971b949d2p+3",
+      "nestedness_margin": "0x1.d0e5be9287621p-1",
       "normalized_l2": "0x1.0000000000000p+1",
       "normalized_linf": "0x1.0000000000000p+1",
       "normalized_p99": "0x1.0000000000000p+1",
@@ -40,7 +40,7 @@
       "absolute_l2": "0x1.869acb73513f4p+13",
       "absolute_linf": "0x1.36d5978120fbbp+14",
       "absolute_p99": "0x1.30f893d1c52a2p+14",
-      "angular_spectral_tail": "0x1.02708ae11eb1fp-2",
+      "angular_spectral_tail": "0x1.6fb095cb14ff1p-7",
       "arrays": {
         "flux_surface_average": {
           "sha256": "2c813ebc1ff40628d3327008af6f25ad498c01791d76e3f8de39ca6c8cdaaa95",
@@ -64,7 +64,7 @@
       "helical_normalized_l2": "0x1.738c186afe60fp+0",
       "minimum_signed_jacobian": "0x1.55c371e0282c4p+2",
       "near_axis_l2": "0x1.63445762496cdp+13",
-      "nestedness_margin": "0x1.55c371e0282c4p+2",
+      "nestedness_margin": "0x1.a961f7e01a45ap-1",
       "normalized_l2": "0x1.fffe0425e3329p+0",
       "normalized_linf": "0x1.fffffef852143p+0",
       "normalized_p99": "0x1.fffff9be707a2p+0",
@@ -77,10 +77,10 @@
     "jax": "0.9.2",
     "jit_disabled": true,
     "machine": "arm64",
-    "note": "Values of every StrongForceReport field that shipped before the volume-averaged normalizations were added, recorded as exact float64 hex on the eager (jit-disabled) lane.",
-    "regenerate_with": "python tools/make_strong_force_baseline.py",
-    "reverified_commit": "09f18464",
-    "vmex_commit": "2d3be2c0"
+    "note": "Regenerated after #258 changed angular_spectral_tail (mask on |m|, corner counted once) and nestedness_margin (min / mean |Jacobian|); every other value is unchanged to the hex digit.",
+    "vmex_commit": "928d4fc3",
+    "reverified_commit": "928d4fc3",
+    "regenerate_with": "python tools/make_strong_force_baseline.py"
   },
   "schema": "vmex.strong-force-certificate-baseline/1"
 }
