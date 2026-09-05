@@ -118,9 +118,11 @@ class PolishLinearReport(NamedTuple):
     tolerance: jax.Array
     #: Krylov iterations consumed, summed over restart cycles.
     iterations: jax.Array
-    #: Boolean scalar array, true when either the solver's own flag or the
-    #: recomputed residual clears ``tolerance``.  The returned solution is
-    #: filled with NaN wherever this is false.
+    #: Boolean scalar array, true only when every operand, the solution, the
+    #: norms and the tolerance are finite and the recomputed
+    #: ``residual_norm`` is within ``tolerance``.  The solver's own success
+    #: flag plays no part.  The returned solution is filled with NaN wherever
+    #: this is false.
     converged: jax.Array
 
 
