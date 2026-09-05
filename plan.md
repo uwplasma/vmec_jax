@@ -8,71 +8,32 @@ the remaining physics and distributed solver work is not yet implemented.
 
 ## Execution logbook
 
-- **Completed checkpoint (2026-09-05 UTC):** custom-VJP native-input provenance.
-  Resume in `/Users/rogeriojorge/local/vmex-vjp-native`, branch
-  `fix/polish-vjp-native-input`, based on `4c2d29a3` (PR #269). Production fix,
-  focused regressions and full CPU derivative integration are validated.
-  Implementation `ac759d09`, [PR #270](https://github.com/uwplasma/vmex/pull/270).
-  Preserve original user worktrees. All commits use author `rogeriojorge`.
-- **PR stack:** plan [#267](https://github.com/uwplasma/vmex/pull/267) →
-  true linear residual [#268](https://github.com/uwplasma/vmex/pull/268) →
-  shared force certificate [#269](https://github.com/uwplasma/vmex/pull/269) →
-  native-input VJP [#270](https://github.com/uwplasma/vmex/pull/270).
-  These remain open at this checkpoint; local checks do not imply CI/merge.
-- **Completed R1:** `b2bd9da6` / #268. Finite unpreconditioned derivative
-  residuals are authoritative. CPU focused plus integration: 43 tests, 374.17 s;
-  GPU focused: 42 tests, 8.68 s; static preflight passed.
-- **Completed R2 subset:** `02a31622` / #269. One finite force/quadrature/Jacobian
-  predicate serves all four early/final acceptance points; diagnostics agree.
-  Follow-up `4c2d29a3` preserves solver success when the independent force
-  certificate fails; all 68 route regressions passed again (0.46 s).
-  68 route tests passed (0.42 s), 3 continuation/derivative tests passed
-  (358.04 s), and the public Solovev correction regression passed (285.55 s).
-  That real lift passed the force threshold but failed quadrature; retaining
-  the existing thresholds now triggers correction before certification.
-  Static preflight and warning-strict Sphinx build passed. No new production
-  API or file was added. Full A remains open.
-- **Current reproducer/fix:** the custom VJP discarded primal native leaves and
-  used `runtime.native` in its backward pass. For analytic `g(c,q)=c-q^2=0`,
-  output `q+c`, stale runtime `q=1`, input `q=2`, stationary `c=4`, it returned
-  gradient 3 instead of 5. Both eager and JIT regressions failed before the fix.
-  The forward now saves its native leaves; backward replaces only the native
-  state in the frozen runtime before applying the adjoint. Chart/discretization
-  remain fixed. This does not solve or certify nonlinear stationarity.
-- **Current validation:** CPU focused `-k 'polish_vjp_uses_primal_native_input or polish_linear'`:
-  44 passed, 129 deselected, 3.06 s. The analytic regression uses the real
-  adjoint/GMRES/custom-VJP chain and successive inputs through one compiled
-  function; only the physics equation is substituted. It is not an MHD benchmark.
-  GPU focused subset: 44 passed, 129 deselected, 12.73 s on RTX A4000
-  (JAX 0.9.2, float64, actual JIT enabled). Static preflight passed (43 guards,
-  3 skips, Ruff/mypy/prose); warning-strict Sphinx build passed. The existing
-  CPU MHD derivative integration passed: 1 test, 172 deselected, 292.00 s.
-  No full repository-suite or distributed-equilibrium claim is made.
-- **Resume commands:** from this worktree use
-  `VMEX_COMPILATION_CACHE=disabled python3 -m pytest -q tests/test_polish_preconditioner.py -k collocation_polish_primal_and_derivatives`,
-  `python3 tools/preflight.py --static`, and a warning-strict Sphinx build.
-  GPU source/test copies are isolated in `office:/home/rjorge/local/vmex-vjp-native`
-  (detached `09f18464` plus current driver/implicit/test copies); use
-  `/home/rjorge/venvs/vmex-gpu/bin/python`, `JAX_PLATFORMS=cuda,cpu` and the
-  focused selection above. No full GPU MHD integration claim is made.
-- **Consumer audit:** `core/cli.py::_write_wout_from_result` already gates native
-  export on `polish_report.converged`; multigrid reports failed polish explicitly.
-  `return_unpolished` retains an uncertified native lift, so callers must inspect
-  the report. Direct native export and resumed-solve contracts remain to test.
-- **Next:** review/merge the stacked acceptance/VJP PRs as CI permits, then
-  enforce stationarity eligibility for current native data
-  at derivative entry points, with explicit scaling/tolerances and eager/JIT
-  failure status. Preserve the distinction between physics acceptance, nonlinear
-  stationarity and linear-solve certification. The existing MHD test permits
-  physics acceptance after one GN step; its duality/Taylor checks alone do not
-  prove nonlinear-root derivative accuracy. For that next gate, reuse the primal
-  `g` already returned by tangent `jax.linearize` and adjoint `jax.vjp` instead
-  of adding another force evaluation. Match the primal scaling explicitly:
-  for `c=D*y` and `r_scaled=r/a`, the scaled stationarity is `D*g/a**2`.
-  The existing solver optimality is in these scaled coordinates; a raw `g`
-  threshold is not interchangeable. Carry the required scale/threshold provenance
-  through `PolishContext` and the custom-VJP saved data, and certify at the actual
-  forward native inputs. Continue the wider A gates in order.
+- **Completed (2026-09-05 UTC):** scope missing-golden skips to external comparisons
+  in `tests/test_optimize.py`. Worktree `/Users/rogeriojorge/local/vmex-optimizer-tests`,
+  branch `test/optimizer-fixture-scope`, based on `6e365a6f` / PR #270. This is
+  a sibling of the stationarity work in `/Users/rogeriojorge/local/vmex-stationarity`.
+- **Reproducer:** #269 C3D job 101254672103 ran 62 passed / 37 skipped; #270
+  job 101254700521 ran 96 passed / 3 skipped. `GOLDEN_DIR=None` applied a
+  module-wide skip to all 34 optimizer tests, including local-deck and pure-API
+  tests. Combined coverage was 94.7978% vs 94.9718%, chiefly 35 optimizer lines
+  and 5 statephysics lines. Raw logs/coverage are outside git under
+  `vmex-review-evidence-20260905/pr269-coverage`, `pr270-coverage`, and the C3D logs.
+- **Fix:** remove the module-wide golden skip; `_golden_wout` skips just the
+  callers that actually require external fixtures. Keep the JIT fixture and
+  all coverage thresholds. With `VMEX_GOLDEN_DIR=/nonexistent-vmex-test-fixture`,
+  the focused selection `boundary_pack_roundtrip or ess_scale or
+  public_problem_factory_validation or qs_solovev_axisymmetric_sanity or
+  uncertified_jacobian` skipped all 6 tests before the fix; afterward 5 passed
+  and only the golden comparison skipped (12.33 s). Static preflight passed:
+  Ruff/mypy/prose plus 43 guard tests, 3 skips (14.07 s).
+- **Merge state:** #267 is ready for review; main requires one approving GitHub
+  review and none exists. Repository auto-merge is disabled. No bypass or merge
+  was performed. #269's coverage drop is not a passing badge; repeat CI after
+  this test-selection repair is integrated. Other required stack CI passed.
+- **Next:** commit/push a scoped PR on #270,
+  then return to `vmex-stationarity` for the nonlinear derivative gate and its
+  CPU/GPU checks. Keep both branches' results in the active plan before resuming
+  A's remaining acceptance, benchmark and admissibility tasks.
 
 ## 1. Outcome and order of work
 
