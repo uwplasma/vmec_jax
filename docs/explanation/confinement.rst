@@ -697,9 +697,11 @@ poloidal-tangential magnetic drifts (Velasco et al., Nucl. Fusion 61,
 factor evaluated at the field minimum of each well; KNOSOS uses the
 :math:`\gamma_c^*` variant, which drops that factor).  The residual rows
 are :math:`\Gamma_c` per surface, so the least-squares cost is the sum of
-:math:`w\,\Gamma_c^{2}`; Velasco et al. 2021, eqs. (20)-(21), relate the
-prompt-loss fraction approximately linearly to :math:`\Gamma_c` (more
-linearly to the :math:`|\gamma_c^*|` variant).  Bader et al. and Paul et
+:math:`w\,\Gamma_c^{2}`; the square is the least-squares form, and
+:math:`\Gamma_c` itself is a proxy rather than a loss law — Velasco et al.
+2021 (section 5.4) find the prompt-loss fraction follows their
+:math:`|\gamma_c^*|` variant (eq. 21) more linearly, and validate
+:math:`\Gamma_\alpha` as the predictor.  Bader et al. and Paul et
 al. document that such proxies correlate imperfectly with measured
 energetic-particle losses, which bounds what any :math:`\Gamma_c` value
 claims. :class:`~vmex.core.gammac.GammaC` evaluates the drift ratio in
