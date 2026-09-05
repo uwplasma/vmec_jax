@@ -1555,7 +1555,7 @@ status and never blocks.
 | 13 | #266 coil target/seed/profile | stacked on #265 | Merge after 12 |
 | 14 | #261 polish memory/AUTO/heartbeat | parity c2 red: missing artifact; branch rebased onto main with #258 (27 commits, clean) and two commits the dead agent never pushed are now on it | Commit `benchmarks/polish_memory_w7x.json` from the office rerun (first run: `measurement_dirty` true because the harness's own `arm_*.json` dirtied the checkout — use `--scratch`; second run: the `auto` arm died with SIGSEGV in the chart build at 6.85 GiB, an intermittent native crash on the office box that must be recorded with the artifact; third run in flight); then 0.8.2 |
 | 15 | #197 contributor examples | behind main | Rebase (`codex/scalar-optimization-drivers-rebased` is clean); add the one-sentence trade note; merge as examples |
-| 16 | #275 force-error normalizations | preflight PASS, 33 strong-force tests; rebased onto main after #258 (one appended-tests conflict resolved) | Re-verify against #258's `nestedness_margin` redefinition (its committed certificate baseline predates it), push, merge; it retires every "26-fold" number |
+| 16 | #275 force-error normalizations | rebased onto main after #258; its certificate baseline was regenerated because #258 redefined exactly two pinned fields (`angular_spectral_tail`, `nestedness_margin`) — the diff touches those two on both cases and nothing else; pushed as c27be90a | Merge when green; it retires every "26-fold" number |
 | 17 | #272 Γ_c prompt-loss wording | docs only | Merge; it corrects a statement #250 introduced (below) |
 
 After step 14, tag **v0.8.2** with #261, #254, #258, #259 and #262: a
