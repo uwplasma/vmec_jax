@@ -1459,7 +1459,7 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
         monkeypatch.setattr(driver, "_solve_residual", lambda *a: jnp.zeros(1))
         monkeypatch.setattr(driver, "_normalized_low_residual_norm", lambda *a: 0.0)
         monkeypatch.setattr(driver, "_corrected_state", lambda *a: native)
-        monkeypatch.setattr(driver, "certify_strong_force", lambda *a: certificate)
+        monkeypatch.setattr(driver, "certify_strong_force", lambda *a, **k: certificate)
         result = driver.polish_strong_root(runtime, config=config, initial_certificate=initial)
         assert result.polish_report.converged == accepted
         assert result.polish_report.radial_refinement_tolerance == 0.001
@@ -1477,8 +1477,8 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
         monkeypatch.setattr(driver, "strong_collocation_residual", lambda *a: jnp.ones(1))
         monkeypatch.setattr(driver, "_collocation_variable_scale", lambda *a: np.ones(1))
         monkeypatch.setattr(driver, "_corrected_state", lambda *a: native)
-        monkeypatch.setattr(driver, "certify_strong_force", lambda *a: certificate)
-        monkeypatch.setattr(driver, "_gauss_newton_polish_lane", lambda *a: SimpleNamespace(
+        monkeypatch.setattr(driver, "certify_strong_force", lambda *a, **k: certificate)
+        monkeypatch.setattr(driver, "_gauss_newton_polish_lane", lambda *a, **k: SimpleNamespace(
             x=jnp.zeros(1), accepted_steps=0, rejected_steps=0, steps=1,
             linear_iterations=1, cost=0.0, gradient_norm=1.0,
             history=SimpleNamespace(gradient_norm=jnp.ones(1)),
