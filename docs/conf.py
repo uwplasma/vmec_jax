@@ -164,7 +164,7 @@ linkcheck_ignore = [
     # Generated evidence links into this repository 404 on a PR whose commit
     # is ahead of main; file existence is enforced locally by
     # tests/test_capability_docs.py, which is stronger than a URL probe.
-    r"https://github\.com/uwplasma/VMEX/blob/main/.*",
+    r"https://github\.com/uwplasma/vmex/blob/main/.*",
 ]
 linkcheck_timeout = 30
 # github.com aborts a share of a runner's concurrent probes outright

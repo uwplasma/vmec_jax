@@ -10,11 +10,11 @@ version = "0.8.1"
 description = "JAX implementation of VMEC2000 with differentiable fixed-boundary and branch-local free-boundary research paths."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{name = "vmex contributors"}]
+authors = [{name = "Rogerio Jorge", email = "rogerio.jorge@wisc.edu"}]
 license = "MIT"
 keywords = ["vmec", "stellarator", "mhd", "jax", "optimization"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -25,8 +25,12 @@ classifiers = [
 
 dependencies = [
   "numpy",
-  "jax",
-  "jaxlib",
+  # 0.4.36 added the jax_logging_level config option that vmex/__init__ sets
+  # at import to quiet XLA/PjRt; an older JAX only gets a RuntimeWarning and
+  # environment-level suppression.  The macOS persistent-cache guard in
+  # vmex/_compat.py is conditional on the installed jaxlib and needs no floor.
+  "jax>=0.4.36",
+  "jaxlib>=0.4.36",
   # 1.15 added least_squares(callback=), used by the optimization examples.
   "scipy>=1.15",
   "netCDF4",

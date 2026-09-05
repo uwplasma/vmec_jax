@@ -333,7 +333,7 @@ A4000, jax cuda12 — different hosts, so read each column on its own terms):
      - **88.8 s**
      - 151 s
 
-The headline: **a fast desktop CPU beats the A4000 GPU on every production
+In short: **a fast desktop CPU beats the A4000 GPU on every production
 workflow, even at ns = 201.** Forward solves are close. Free-boundary GPU
 runs use a hybrid decomposition: plasma iterations stay on the accelerator,
 while the small dense NESTOR block runs on CPU with a reused LU factor. The
@@ -630,8 +630,8 @@ after 1,600 explicit ``PRE_NITER`` steps.  A separate VMEC2000 1-D solve
 converges and agrees with the VMEX result in ``wb`` to ``1.3e-11`` relative
 and in the primary geometry to better than ``1e-5``.  The opt-in live test
 ``test_live_vmec2000_exact_jvp_gmres_robustness`` reproduces all three paths.
-This is a robustness result, not a CPU speed or memory claim: the small
-VMEC2000 1-D solve is still much cheaper than a cold JAX process.
+This is a convergence-reliability result, not a CPU speed or memory claim:
+the small VMEC2000 1-D solve is still much cheaper than a cold JAX process.
 
 Memory
 ------
@@ -909,9 +909,9 @@ it is skipped automatically when they are unavailable.
 Workflow observability harness
 ------------------------------
 
-``benchmarks/profile_workflows.py`` is the one driver for flagship-workflow
-timing, memory, and compile observability. Every record separates build,
-per-stage execution (fenced with ``block_until_ready``), and — for the two
+``benchmarks/profile_workflows.py`` is the one driver for timing, memory,
+and compile observability of the principal workflows. Every record separates
+build, per-stage execution (fenced with ``block_until_ready``), and — for the two
 process-level regimes — total process wall time, alongside trace/compile
 counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
 
@@ -920,8 +920,9 @@ counts read from JAX's own ``jax_log_compiles`` records and peak host RSS::
    python benchmarks/profile_workflows.py --all --regimes warm --out benchmarks/baselines/m4/
    python benchmarks/profile_workflows.py F4 C2 --trace-dir benchmarks/traces/
 
-The registry covers the plan's workflow matrix: fixed-boundary solves
-(single-grid, multigrid, polished), implicit value/gradient, vector residual
+The registry covers the workflow matrix defined in
+``benchmarks/profile_workflows.py``: fixed-boundary solves (single-grid,
+multigrid, polished), implicit value/gradient, vector residual
 plus full Jacobian, hot-restart scans, optimization campaigns (scalar
 L-BFGS-B and residual least-squares), single-stage plasma-plus-coils with
 ESSOS, the free-boundary implicit value and adjoint, symmetric-versus-LASYM
@@ -929,7 +930,7 @@ pairs at matched resolution, mirror equilibria (fixed-boundary,
 free-boundary, and the periodic hybrid with its GK geometry export), Boozer
 transforms at one and many surfaces, and the epsilon-effective and Gamma-c
 diagnostics. ``--trace-dir`` captures one XProf trace per stage on a warm
-repeat, so every flagship class has execution-level evidence, not only wall
+repeat, so every workflow class has execution-level evidence, not only wall
 times. Committed baselines live under ``benchmarks/baselines/`` (one
 directory per platform), each record stamped with the commit it measured
 and a clean-tree flag.

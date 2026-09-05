@@ -164,6 +164,77 @@ def test_run_from_json(tmp_path):
     assert (tmp_path / "output_run_from_json" / "wout_circular_tokamak.nc").exists()
 
 
+def test_epsilon_effective_example_bounds_the_neo_controls() -> None:
+    """The example must stay responsive and must not chase a rational surface.
+
+    ``max_rational_field_periods=0`` asks NEO_JAX for an unlimited exact
+    rational correction, which on a near-rational surface does not finish in
+    an example's budget; the script documents the bound and keeps it finite.
+    """
+    source = (EXAMPLES / "epsilon_effective.py").read_text()
+    assert "epsilon_effective_from_wout" in source
+    assert "max_rational_field_periods=100000" in source
+    assert "input.LandremanPaul2021_QA_lowres" in source
+    # a radial profile, not a single surface: the trend is the result
+    assert "SURFACES = np.linspace(0.15, 0.95, 5)" in source
+    assert "surfaces=SURFACES" in source and "config=NEO_CONFIG" in source
+
+
+# NEO_JAX is the optional ``neoclassical`` extra, which no CI lane installs
+# today, so this skips everywhere in CI; it is the on-demand check for the
+# example (``pip install vmex[neoclassical]``, then RUN_FULL=1).
+@pytest.mark.full  # ~3.5 min: one solve, then a Boozer transform per surface
+def test_epsilon_effective_example(tmp_path):
+    pytest.importorskip("neo_jax")
+    out = _run_example(EXAMPLES / "epsilon_effective.py", tmp_path, timeout=1800)
+    values = re.search(r"epsilon_eff\^\(3/2\) = \[(.+?)\]", out, re.S)
+    assert values is not None, out
+    profile = np.array([float(v) for v in values.group(1).split()])
+    assert profile.size == 5 and np.all(np.isfinite(profile))
+    # a QA ripple is small but nonzero, and rises toward the boundary
+    assert np.all(profile > 0) and np.all(profile < 1e-2)
+    assert profile[-1] > profile[0], f"eps_eff should rise outward: {profile}"
+    assert (tmp_path / "epsilon_effective.png").stat().st_size > 10_000
+
+
+def test_force_balance_polishing_example_refuses_an_uncertified_export() -> None:
+    """The polish is only evidence if the example stops when it fails.
+
+    ``solve_file`` returns a polished state whenever the deck asks for one;
+    the certificate is the ``polish_report``. Exporting the dense-mesh WOUT
+    without checking ``converged`` would ship an uncertified equilibrium as
+    if it were polished, so keep both guards explicit.
+    """
+    deck = EXAMPLES / "data" / "input.shaped_tokamak_pressure_polished"
+    assert "POLISH_FORCE_BALANCE = .TRUE." in deck.read_text()
+    source = (EXAMPLES / "force_balance_polishing.py").read_text()
+    assert "result.polished_state is None or result.polish_report is None" in source
+    assert "if not report.converged:" in source
+    for field in ("initial_normalized_l2", "final_normalized_l2",
+                  "nonlinear_iterations", "termination_reason"):
+        assert field in source
+
+
+@pytest.mark.full  # nightly: ordinary solve + strong-force polish + 12 figures (~2 min)
+def test_force_balance_polishing_example(tmp_path):
+    out = _run_example(EXAMPLES / "force_balance_polishing.py", tmp_path, timeout=1200)
+    assert "POLISH CERTIFIED" in out
+    certificate = re.search(
+        r"independent strong-force certificate: ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert certificate is not None, out
+    initial, final = (float(g) for g in certificate.groups())
+    assert final < initial, f"the polish must lower the strong-force residual: {out}"
+    outdir = tmp_path / "output_force_balance_polishing"
+    for name in ("wout_shaped_tokamak_before_polish.nc",
+                 "wout_shaped_tokamak_pressure_polished.nc"):
+        assert (outdir / name).exists()
+    # both stages plot, so the before/after comparison the docstring promises
+    # is actually produced
+    for stage, stem in (("before", "shaped_tokamak_before_polish"),
+                        ("after", "shaped_tokamak_pressure_polished")):
+        assert (outdir / stage / f"{stem}_summary.png").stat().st_size > 10_000
+
+
 def test_hot_restart_scan(tmp_path):
     out = _run_example(EXAMPLES / "hot_restart_scan.py", tmp_path, timeout=900)
     base = re.search(r"cold base solve:\s*(\d+) iters", out)

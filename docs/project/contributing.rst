@@ -1,18 +1,6 @@
 Contributing
 ============
 
-Migration status
-----------------
-
-The repository recently completed a clean-room rewrite: the production
-implementation is :mod:`vmex.core` (~30 focused modules, one concern per
-file — see :doc:`/explanation/architecture`), and the ``vmec`` CLI runs on it end to end.
-The remaining top-level legacy modules are being removed in an ongoing
-deletion sweep; new code, tests, and documentation should target
-``vmex.core`` only. Every core module was validated by A/B equivalence
-tests against the parity-proven legacy implementation
-(``tests/``) and end to end against VMEC2000 golden runs.
-
 Workflow
 --------
 
@@ -127,6 +115,15 @@ Releases are cut from ``main``:
    ``publish-pypi`` workflow validates that the tag matches the project version
    and uploads the wheel and sdist to PyPI.
 
-Release notes are written on the GitHub Release itself, summarising the
-merged PRs since the previous tag; the repository does not keep a changelog
-file.
+Release notes live in ``CHANGELOG.md`` and the GitHub releases.
+
+Support and conduct
+-------------------
+
+Bug reports, feature requests, and usage questions all go to `GitHub issues
+<https://github.com/uwplasma/vmex/issues>`_, which offers a form for each;
+a bug report needs the input deck and the output of ``vmex --doctor``.
+:doc:`/howto/troubleshoot` covers non-convergence, NaNs, device placement,
+and cache problems first. ``CONTRIBUTING.md`` at the repository root is the
+short version of this page; participation in the project is governed by
+``CODE_OF_CONDUCT.md``, the Contributor Covenant 2.1.

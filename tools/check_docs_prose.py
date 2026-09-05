@@ -4,7 +4,8 @@
 Mechanical checks on the Diátaxis docs tree:
 
 1.  Banned words/phrases in Markdown prose (fenced code and inline code are
-    exempt), including exclamation marks and emoji in headings.
+    exempt), including exclamation marks and emoji in headings. The scan
+    covers the docs tree plus the root ``README.md`` and ``CHANGELOG.md``.
 2.  Every how-to title starts with an imperative verb.
 3.  Every page under ``docs/howto`` and ``docs/tutorials`` is <= 250 lines.
 4.  No TODO/FIXME markers in any docs page.
@@ -39,6 +40,11 @@ BANNED = [
     r"\bin order to\b",
     r"\bstate[- ]of[- ]the[- ]art\b",
     r"\bbest[- ]in[- ]class\b",
+    r"\bproduction[- ]ready\b",
+    r"\bflagship\b",
+    r"\bheadline\b",
+    r"\bfirst[- ]class\b",
+    r"\bdemonstrably\b",
 ]
 BANNED_RE = [re.compile(p, re.IGNORECASE) for p in BANNED]
 
@@ -191,6 +197,13 @@ def main() -> int:
     markdown_pages = [p for p in markdown_pages if "_build" not in p.parts]
     for page in markdown_pages:
         check_markdown(page, errors)
+
+    # Root prose ships too: README.md is the PyPI long description and
+    # CHANGELOG.md (when present) the release record.
+    for name in ("README.md", "CHANGELOG.md"):
+        page = ROOT / name
+        if page.exists():
+            check_markdown(page, errors)
 
     for page in markdown_pages:
         if page.parent == DOCS / "howto" and page.name != "index.md":

@@ -1,0 +1,68 @@
+name: Bug report
+description: A solve, derivative, CLI, or plotting result that is wrong or crashes
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions about how to use VMEX are welcome as issues too; pick
+        "Question or support" instead so they are not tracked as defects.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The failure, and the command or Python call that triggered it.
+      placeholder: |
+        vmex input.li383_low_res
+        ... traceback or wrong number ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: >-
+        What you expected, and the VMEC2000 or VMEC++ result if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: input-file
+    attributes:
+      label: Input file
+      description: >-
+        Paste the input deck (INDATA or JSON), or attach it along with any
+        mgrid or wout file the run needs. A minimal deck that still reproduces
+        the problem is the most useful form.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `vmex --doctor`
+      description: >-
+        Records the Python, JAX, jaxlib, and device versions the run used.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options:
+        - CPU
+        - GPU
+        - Both
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: >-
+            I read the troubleshooting guide
+            (https://vmex.readthedocs.io/en/latest/howto/troubleshoot.html).
+          required: false
+        - label: I searched the existing issues.
+          required: false

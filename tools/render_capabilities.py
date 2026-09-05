@@ -45,7 +45,7 @@ def render(data: dict) -> str:
     ]
     for row in data["rows"]:
         evidence = ", ".join(
-            f"`{Path(path).name} <https://github.com/uwplasma/VMEX/blob/main/{path}>`__"
+            f"`{Path(path).name} <https://github.com/uwplasma/vmex/blob/main/{path}>`__"
             for path in row["evidence"]
         )
         cells = [
@@ -62,9 +62,9 @@ def render(data: dict) -> str:
         "-----------------------------",
         "",
         "A supported forward free-boundary solve does not imply that every derivative",
-        "mode is production-ready. VMEX exposes an experimental reverse derivative",
+        "mode is ready for routine use. VMEX exposes an experimental reverse derivative",
         "of the reconverged plasma-vacuum root on CPU, certified against independent",
-        "free-boundary re-solves. Forward JVPs, low-memory GPU compilation, and robust",
+        "free-boundary re-solves. Forward JVPs, low-memory GPU compilation, and reliable",
         "failed-trial walls remain open promotion gates. The prescribed-boundary",
         "virtual-casing derivative is the mature path for fixed-LCFS coil objectives.",
         "",

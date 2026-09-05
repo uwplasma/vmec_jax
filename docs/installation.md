@@ -7,8 +7,9 @@ Boozer transform — no user-facing extras to remember. Verify with
 ## Requirements
 
 - Python 3.10+ (Python 3.12+ recommended for current accelerator-enabled JAX)
-- `numpy`, `jax` + `jaxlib`, `netCDF4`, `matplotlib`, `booz_xform_jax`
-  (all installed automatically)
+- `numpy`, `jax` + `jaxlib` (0.4.36 or newer: VMEX sets the
+  `jax_logging_level` option introduced in that release), `netCDF4`,
+  `matplotlib`, `booz_xform_jax` (all installed automatically)
 
 ## From PyPI
 

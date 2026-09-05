@@ -103,10 +103,12 @@ def test_benchmark_artifacts_disclose_redacted_provenance() -> None:
         ROOT / "benchmarks" / "baseline.json",
         ROOT / "benchmarks" / "freeboundary_multigrid.json",
         ROOT / "benchmarks" / "high_mode_fft.json",
+        ROOT / "benchmarks" / "gpu_baseline.json",
+        ROOT / "benchmarks" / "convergence_nfp4_ns51.json",
     )
     for artifact in artifacts:
         report = json.loads(artifact.read_text())
-        provenance = report["_provenance"] if artifact.name == "baseline.json" else report["provenance"]
+        provenance = report.get("_provenance") or report["provenance"]
         assert re.fullmatch(r"[0-9a-f]{8,40}", provenance["measurement_commit"])
         assert provenance["input_data_embedded"] is False
         encoded = json.dumps(provenance)
@@ -348,8 +350,8 @@ def test_readme_strong_force_figure_matches_committed_sources() -> None:
     assert representation["L"] >= 16
     assert representation["M"] >= 10 and representation["N"] >= 10
     assert desc["metrics"]["radial_refinement_difference"] < 1.0e-3
-    # No timing-ratio claims: the plan's README figure policy is accuracy
-    # only; runtime evidence lives in benchmarks/baselines, not in guards.
+    # No timing-ratio claims: the README figure policy is accuracy only;
+    # runtime evidence lives in benchmarks/baselines, not in guards.
     readme = (ROOT / "README.md").read_text()
     assert metadata["figure"] in readme
     assert metadata["summary_figure"] in readme

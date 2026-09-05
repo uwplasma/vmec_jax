@@ -7,7 +7,7 @@
 [![Coverage](https://codecov.io/gh/uwplasma/vmex/branch/main/graph/badge.svg)](https://codecov.io/gh/uwplasma/vmex)
 [![Docs](https://img.shields.io/readthedocs/vmex/latest?label=docs)](https://vmex.readthedocs.io/en/latest/)
 
-> **Rename note:** `vmec_jax` is now `vmex`; the deprecated `import vmec_jax` compatibility shim still ships with VMEX 0.5.
+> **Rename note:** `vmec_jax` is now `vmex`; the deprecated `import vmec_jax` compatibility shim still ships and will be removed in a future minor release.
 
 VMEX is a JAX implementation of VMEC for stellarator and tokamak ideal-MHD equilibria. It reads standard VMEC input files, solves fixed- and free-boundary problems, writes standard `wout_*.nc` files, and provides exact implicit derivatives of converged fixed-boundary equilibria for optimization.
 
@@ -550,6 +550,10 @@ python -m ruff check vmex tests examples benchmarks
 
 See [contributing](https://vmex.readthedocs.io/en/latest/project/contributing.html) and the [test manifest](tests/manifest.json). Release notes are on [GitHub](https://github.com/uwplasma/vmex/releases). VMEX uses the MIT license.
 
+## Getting support
+
+Bug reports, feature requests, and questions all go to [GitHub issues](https://github.com/uwplasma/vmex/issues), which offers a template for each; include the input file and the output of `vmex --doctor`. [Troubleshooting](https://vmex.readthedocs.io/en/latest/howto/troubleshoot.html) covers non-convergence, NaNs, and device placement first. Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md); participation is governed by the [code of conduct](CODE_OF_CONDUCT.md).
+
 ## Roadmap
 
 The detailed, phased plan lives in [plan.md](plan.md). In flight now:
@@ -562,7 +566,7 @@ The detailed, phased plan lives in [plan.md](plan.md). In flight now:
   Nemov proxy and is checked against drift-kinetic identities and its own
   `wout` tables, but no test yet asserts its value against a number
   computed by DESC's `GammaC` on a shared equilibrium.
-- Up-down asymmetric (LASYM) equilibria as a first-class certified lane.
+- Up-down asymmetric (LASYM) equilibria as a fully supported certified lane.
 - Promote the boundary-Schur free-boundary adjoint and coil-only
   free-boundary single-stage optimization after their compile and GPU
   memory costs come down.

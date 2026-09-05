@@ -193,8 +193,8 @@ def render(
     tokamak: dict[str, dict],
     output: Path,
 ) -> None:
-    # Accuracy only, and only rows where certified polishing demonstrably
-    # beats the legacy codes, per the plan's README figure policy. The
+    # Accuracy only, and only rows where certified polishing beats the legacy
+    # codes on the independent force certificate (README figure policy). The
     # stellarator row returns when the production polish is tractable in 3D
     # (the captured-constants elimination now in progress); its bundle case
     # stays recorded for that day.
@@ -515,9 +515,10 @@ def main() -> None:
             }
         ),
         "timing_note": (
-            "Accuracy only, and only rows where certified polishing "
-            "demonstrably beats the legacy codes, per the plan's README "
-            "figure policy; runtime evidence lives in benchmarks/baselines. "
+            "Accuracy only, and only rows where certified polishing beats "
+            "the legacy codes on the independent force certificate, per the "
+            "README figure policy (accuracy only); runtime evidence lives in "
+            "benchmarks/baselines. "
             "All errors from one shared independent oracle on each code's "
             "exported equilibrium (VMEX: the certified polished state). The "
             "stellarator row returns when the 3-D production polish is "

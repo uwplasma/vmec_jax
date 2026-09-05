@@ -80,6 +80,14 @@ The theory: [the variational problem](explanation/variational-problem.rst),
 
 ::::
 
+## Getting support
+
+Bug reports, feature requests, and questions all go to
+[GitHub issues](https://github.com/uwplasma/vmex/issues), which offers a
+template for each; include the input file and the output of `vmex --doctor`.
+{doc}`howto/troubleshoot` covers non-convergence, NaNs, and device placement
+first. Contributions follow {doc}`project/contributing`.
+
 ```{figure} /_static/figures/readme_runtime_compare.webp
 :alt: Runtime comparison of VMEX against VMEC2000 and VMEC++
 :width: 95%

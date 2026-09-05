@@ -83,6 +83,15 @@ jobs:
         run: |
           pytest -q tests/test_examples.py::test_free_boundary_essos_coils \
             --vmex-report=test-report-coils.json
+      # The strong-force polish is too slow for the PR example lane (~2 min for
+      # the solve, the polish, and both figure sets) but is the only run-level
+      # check that the certificate the docs quote is still produced.
+      - name: Run force-balance polishing smoke
+        env:
+          RUN_FULL: "1"
+        run: |
+          pytest -q tests/test_examples.py::test_force_balance_polishing_example \
+            --vmex-report=test-report-polish.json
       - uses: actions/upload-artifact@v7.0.1
         if: always()
         with:

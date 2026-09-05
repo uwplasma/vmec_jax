@@ -8,7 +8,7 @@ VMEC2000's exact ``interp.f`` transfer. The same interpolation seam provides
 hot restart from a previous solution — the recipe side is
 :doc:`/howto/restart-from-previous-run` and :doc:`/howto/parameter-scans`.
 
-A ladder is a robustness tool, not a requirement. A smooth optimized deck or
+A ladder is a convergence aid, not a requirement. A smooth optimized deck or
 a hot restart can use one entry such as ``NS_ARRAY = 31`` and avoid the coarse
 solves and their executable shapes. On the bundled 0.5%-beta QA case, a cold
 single-31 solve reproduced the ``9,17,31`` result to 0.02% in edge iota while
