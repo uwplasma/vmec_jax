@@ -11,11 +11,12 @@ import jax
 import numpy as np
 import pytest
 
-from vmex.core import cli
+from vmex.core import cli, profiles, scaling
 from vmex.core.errors import INPUT_ERROR_FLAG
-from vmex.core.input import VmecInput
+from vmex.core.input import VmecInput, _trim_aux
 from vmex.core.mgrid import MgridData, read_mgrid, write_mgrid
 from vmex.core.multigrid import solve_free_boundary_multigrid, solve_multigrid
+from vmex.core.postprocess import full_mesh_from_half
 from vmex.core.scaling import (
     aries_cs_scales,
     input_minor_radius,
@@ -24,7 +25,7 @@ from vmex.core.scaling import (
     scale_mgrid,
     scale_wout,
 )
-from vmex.core.wout import read_wout, wout_from_state, write_wout
+from vmex.core.wout import _preset_array, read_wout, wout_from_state, write_wout
 
 DATA = Path(__file__).resolve().parents[1] / "examples" / "data"
 
@@ -157,15 +158,146 @@ def test_scale_wout_commutes_with_finite_beta_solve(finite_beta_similarity):
     original, solved_scaled_input = finite_beta_similarity
     scaled_wout = scale_wout(original, b_scale=2.3, r_scale=1.7)
     _assert_wout_similarity(solved_scaled_input, scaled_wout)
+    # The input path carries B**2 in PRES_SCALE, which a wout does not
+    # record, and the wout path carries it in ``am``; both echoes evaluate
+    # to the same pressure.
+    inp = VmecInput.from_file(DATA / "input.nfp2_QA_finite_beta")
+    _assert_pressure_echo(scaled_wout, inp)
+    _assert_pressure_echo(
+        solved_scaled_input, scale_input(inp, b_scale=2.3, r_scale=1.7)
+    )
+
+
+def test_scale_wout_keeps_pressure_coefficients_consistent_with_presf(
+    finite_beta_similarity,
+):
+    original, _ = finite_beta_similarity
+    inp = VmecInput.from_file(DATA / "input.nfp2_QA_finite_beta")
+    _assert_pressure_echo(original, inp)
+    scaled = scale_wout(original, b_scale=2.3, r_scale=1.7)
+    _assert_pressure_echo(scaled, inp)
+    np.testing.assert_allclose(scaled.am, 2.3**2 * original.am)
+    np.testing.assert_allclose(scaled.am_aux_f, 2.3**2 * original.am_aux_f)
+    # Knot positions are normalized flux, iota is dimensionless, and the
+    # current shape is normalized to ``ctor`` (scaled as B*R) for every
+    # ``pcurr_type``, this deck's tabulated I' knots included.
+    assert original.pcurr_type == "cubic_spline_ip"
+    assert scaled.ctor == pytest.approx(2.3 * 1.7 * original.ctor)
+    for name in (
+        "am_aux_s", "ac", "ac_aux_s", "ac_aux_f", "ai", "ai_aux_s", "ai_aux_f",
+    ):
+        np.testing.assert_array_equal(
+            getattr(scaled, name), getattr(original, name), err_msg=name
+        )
+
+
+_KNOTS = np.linspace(0.0, 1.0, 6)
+_PRESSURE_ECHO_CASES = {
+    # Entries of ``am`` past the amplitudes are exponents, widths, centres,
+    # mixing fractions, or a denominator; each case sets them so a blanket
+    # B**2 on the whole array would change the profile shape.
+    "power_series": dict(am=[7.2e5, -7.1e5, 0.0, 0.0, 0.0, -7.1e5, 7.0e5]),
+    "two_power": dict(am=[1.0e4, 5.0, 10.0]),
+    "two_power_gs": dict(am=[1.0e4, 2.0, 1.5, 0.3, 0.5, 0.1]),
+    "two_lorentz": dict(am=[1.0e4, 0.6, 0.5, 2.0, 1.0, 0.8, 1.0, 2.0]),
+    "gauss_trunc": dict(am=[1.0e4, 0.7]),
+    "pedestal": dict(am=[1.0e4, -5.0e3] + [0.0] * 15 + [2.0e3, 0.9, 0.1, 0.0]),
+    "rational": dict(am=[1.0e4, -9.0e3] + [0.0] * 8 + [1.0, 0.5]),
+    "cubic_spline": dict(am_aux_s=_KNOTS, am_aux_f=1.0e4 * (1.0 - _KNOTS**2)),
+    "akima_spline": dict(am_aux_s=_KNOTS, am_aux_f=1.0e4 * (1.0 - _KNOTS) ** 2),
+    "line_segment": dict(
+        am_aux_s=_KNOTS, am_aux_f=1.0e4 * np.cos(0.5 * np.pi * _KNOTS),
+    ),
+}
+
+
+def test_pressure_amplitude_table_covers_every_pmass_type():
+    assert set(scaling._PRESSURE_AMPLITUDES) == profiles._PMASS_KINDS
+    assert set(_PRESSURE_ECHO_CASES) == profiles._PMASS_KINDS
+
+
+@pytest.mark.parametrize("kind", sorted(_PRESSURE_ECHO_CASES))
+def test_scale_wout_scales_only_pressure_amplitudes(finite_beta_similarity, kind):
+    original, _ = finite_beta_similarity
+    case = _PRESSURE_ECHO_CASES[kind]
+    wout = dataclasses.replace(
+        original,
+        pmass_type=kind,
+        am=_preset_array(case.get("am")),
+        am_aux_s=_preset_array(case.get("am_aux_s"), 101, -1.0),
+        am_aux_f=_preset_array(case.get("am_aux_f"), 101, 0.0),
+    )
+    s = np.linspace(0.0, 1.0, 9)
+    before = _echo_pressure(wout, s)
+    assert np.isfinite(before).all() and before[0] > 0.0
+    scaled = scale_wout(wout, b_scale=2.3, r_scale=1.7)
+    np.testing.assert_allclose(
+        _echo_pressure(scaled, s), 2.3**2 * before,
+        rtol=1e-9, atol=1e-9 * np.max(np.abs(before)),
+    )
+    amplitudes = sorted(scaling._PRESSURE_AMPLITUDES[kind])
+    shapes = sorted(set(range(21)) - set(amplitudes))
+    np.testing.assert_allclose(scaled.am[amplitudes], 2.3**2 * wout.am[amplitudes])
+    np.testing.assert_array_equal(scaled.am[shapes], wout.am[shapes])
+    np.testing.assert_array_equal(scaled.am_aux_s, wout.am_aux_s)
+    np.testing.assert_allclose(scaled.am_aux_f, 2.3**2 * wout.am_aux_f)
+
+
+def test_scale_wout_tolerates_absent_profile_coefficients(finite_beta_similarity):
+    original, _ = finite_beta_similarity
+    bare = dataclasses.replace(original, am=None, am_aux_f=None)
+    scaled = scale_wout(bare, b_scale=2.0)
+    assert scaled.am is None and scaled.am_aux_f is None
+    np.testing.assert_allclose(scaled.presf, 4.0 * original.presf)
+    with pytest.raises(NotImplementedError, match="pmass_type"):
+        scale_wout(dataclasses.replace(original, pmass_type="two_gauss"))
+
+
+def _echo_pressure(wout, s, **deck):
+    """Pressure described by a wout's ``am``/``am_aux_f`` echo at ``s``.
+
+    The knot arrays carry wrout.f's ``-1``/``0`` fill past the live knots,
+    which ``VmecInput`` trims exactly as ``profile_functions.f`` counts them.
+    """
+    aux_s, aux_f = _trim_aux(wout.am_aux_s, wout.am_aux_f)
+    return np.array(
+        profiles.pressure(wout.pmass_type, wout.am, aux_s, aux_f, s, **deck),
+        dtype=float,
+    )
+
+
+def _assert_pressure_echo(wout, inp):
+    """``am``/``am_aux_f`` evaluate to the wout's own ``pres`` and ``presf``.
+
+    A wout records neither ``PRES_SCALE`` nor ``BLOAT``/``SPRES_PED``, so
+    those come from the deck that produced it.  The decks here keep the
+    identity flux map and ``GAMMA = 0``, under which the half-mesh ``pres``
+    is the profile itself and ``presf`` its eqfor.f full-mesh companion.
+    """
+    aphi = np.asarray(inp.aphi, dtype=float)
+    assert float(inp.gamma) == 0.0 and aphi[0] == 1.0 and not aphi[1:].any()
+    s_half = (np.arange(wout.ns) - 0.5) / (wout.ns - 1)
+    pres = _echo_pressure(
+        wout, s_half, pres_scale=inp.pres_scale, bloat=inp.bloat,
+        spres_ped=inp.spres_ped,
+    )
+    pres[0] = 0.0
+    tolerance = dict(rtol=1e-9, atol=1e-9 * np.max(np.abs(wout.pres)))
+    np.testing.assert_allclose(pres, wout.pres, **tolerance)
+    np.testing.assert_allclose(full_mesh_from_half(pres), wout.presf, **tolerance)
 
 
 def _assert_wout_similarity(actual, expected):
     operational = {
         "mgrid_file", "niter", "itfsq", "fsql", "fsqr", "fsqz", "fsqt", "wdot",
     }
+    # ``scale_input`` puts B**2 into PRES_SCALE and ``scale_wout`` into the
+    # ``am``/``am_aux_f`` amplitudes, because a wout records no PRES_SCALE;
+    # the callers compare those echoes through the pressure they evaluate to.
+    echo = {"am", "am_aux_f"}
     for field in dataclasses.fields(expected):
         name = field.name
-        if name in operational:
+        if name in operational or name in echo:
             continue
         expected_value = getattr(expected, name)
         actual_value = getattr(actual, name)
@@ -213,10 +345,10 @@ def _assert_free_boundary_similarity(
     scaled_mgrid_path = tmp_path / f"{Path(mgrid_path).stem}_scaled.nc"
     write_mgrid(scaled_mgrid_path, scaled_mgrid)
     actual = run(scaled_input, scaled_mgrid, scaled_mgrid_path)
-    _assert_wout_similarity(
-        actual,
-        scale_wout(original, b_scale=b_scale, r_scale=r_scale),
-    )
+    expected = scale_wout(original, b_scale=b_scale, r_scale=r_scale)
+    _assert_wout_similarity(actual, expected)
+    _assert_pressure_echo(expected, inp)
+    _assert_pressure_echo(actual, scaled_input)
 
 
 @pytest.mark.full

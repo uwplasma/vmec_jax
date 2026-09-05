@@ -44,6 +44,14 @@ For inputs, pressure scales once through `PRES_SCALE`; `AM`, `AM_AUX_F`,
 current/iota profiles, and every normalized spline coordinate remain shape
 data. `CURTOR` scales only in prescribed-current mode.
 
+A wout records no `PRES_SCALE`, so `scale_wout` puts $B_s^2$ into the
+coefficients it echoes: every `AM_AUX_F` knot value, and the entries of `AM`
+that multiply the profile for its `PMASS_TYPE` (all of a power series, only
+the leading coefficient of `two_power`, the numerator of `rational`), so the
+profile a scaled wout describes evaluates to its `presf`. `AC`, `AI`, and the
+knot positions stay shape data: iota is dimensionless, and every current
+profile is normalized to `ctor`, which scales as $B_s R_s$.
+
 ## ARIES-CS targets from an input
 
 A wout contains `b0` and `Aminor_p`, so its factors are exact. A fixed
@@ -66,9 +74,11 @@ their geometry and currents must be scaled before field tabulation.
 The defining test is commutation: (1) solve the original input and scale its
 wout; (2) scale the input (and mgrid when present) and reconverge it;
 (3) compare every physical wout scalar, profile, Fourier coefficient,
-Mercier term, and NESTOR potential/surface field. VMEX runs this check for
-finite-pressure prescribed-current fixed boundary and for symmetric and
-LASYM free-boundary NESTOR cases. The structured functions
+Mercier term, and NESTOR potential/surface field. The pressure coefficients
+are compared through the profile they evaluate to, because the input path
+carries $B_s^2$ in `PRES_SCALE` and the wout path in `AM`. VMEX runs this
+check for finite-pressure prescribed-current fixed boundary and for symmetric
+and LASYM free-boundary NESTOR cases. The structured functions
 {func}`vmex.core.scaling.scale_input`,
 {func}`vmex.core.scaling.scale_mgrid`, and
 {func}`vmex.core.scaling.scale_wout` use parsed objects; they never edit
