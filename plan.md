@@ -1568,7 +1568,7 @@ new polish tests in #261 (a live-progress heartbeat at 307 s, the ntor = 1 proje
 paths at ~150 s each, all real polishes on an M4) carry `@pytest.mark.full` and run nightly; lane e had reached 25 minutes on
 main after #269's 705-s Solov'ev correction and timed out at 55 with them in the PR tier.
 
-Steps 1–17 are complete. Tag **v0.8.2** with #261, #254, #258, #259 and #262 (a maintainer action): a
+Steps 1, 6, 8, 14, 16 and 17 are merged (2026-09-05); steps 2–5, 7, 9–13 and 15 are still open and most are now BEHIND main, so each needs a rebase — #263 and #264 edit the old plan's ledger and must re-express those edits against this file. Tag **v0.8.2** once #259 and #262 are in (a maintainer action): a
 user-facing release (no OOM at W7-X scale, a priced AUTO, a heartbeat, a
 cache that does not slow down with age, correct certificate diagnostics)
 that makes no new 3-D accuracy claim.
