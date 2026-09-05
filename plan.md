@@ -12,10 +12,12 @@ the remaining physics and distributed solver work is not yet implemented.
   Resume in `/Users/rogeriojorge/local/vmex-vjp-native`, branch
   `fix/polish-vjp-native-input`, based on `4c2d29a3` (PR #269). Production fix,
   focused regressions and full CPU derivative integration are validated.
+  Implementation `ac759d09`, [PR #270](https://github.com/uwplasma/vmex/pull/270).
   Preserve original user worktrees. All commits use author `rogeriojorge`.
 - **PR stack:** plan [#267](https://github.com/uwplasma/vmex/pull/267) →
   true linear residual [#268](https://github.com/uwplasma/vmex/pull/268) →
-  shared force certificate [#269](https://github.com/uwplasma/vmex/pull/269).
+  shared force certificate [#269](https://github.com/uwplasma/vmex/pull/269) →
+  native-input VJP [#270](https://github.com/uwplasma/vmex/pull/270).
   These remain open at this checkpoint; local checks do not imply CI/merge.
 - **Completed R1:** `b2bd9da6` / #268. Finite unpreconditioned derivative
   residuals are authoritative. CPU focused plus integration: 43 tests, 374.17 s;
