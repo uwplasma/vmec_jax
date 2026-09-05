@@ -566,7 +566,7 @@ The detailed, phased plan lives in [plan.md](plan.md). In flight now:
   Nemov proxy and is checked against drift-kinetic identities and its own
   `wout` tables, but no test yet asserts its value against a number
   computed by DESC's `GammaC` on a shared equilibrium.
-- Up-down asymmetric (LASYM) equilibria as a first-class certified lane.
+- Up-down asymmetric (LASYM) equilibria as a fully supported certified lane.
 - Promote the boundary-Schur free-boundary adjoint and coil-only
   free-boundary single-stage optimization after their compile and GPU
   memory costs come down.
