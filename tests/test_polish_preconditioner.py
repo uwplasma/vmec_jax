@@ -1438,7 +1438,7 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
                      "_dof_mask", "_refined_state"):
             monkeypatch.setattr(implicit, name, lambda *a, **k: native)
         monkeypatch.setattr(strong_force, "lift_high_order_state", lambda *a, **k: native)
-        monkeypatch.setattr(strong_force, "certify_strong_force", lambda *a: certificate)
+        monkeypatch.setattr(strong_force, "certify_strong_force", lambda *a, **k: certificate)
         monkeypatch.setattr(driver, "build_low_order_preconditioner", correction_required)
         run = lambda: driver.polish_legacy_solution(  # noqa: E731
             _small_solovev_input(), SimpleNamespace(ns=5), native, config=config)
