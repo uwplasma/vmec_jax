@@ -1957,8 +1957,10 @@ The current hybrid is a periodic closed field-line device with straight mirror-l
   distance between the two |B| maxima bounding a well) and `L_straight` (arc
   length where the axis curvature is negligible), with persistence pruning so
   ripple in a solved |B| is not reported as an extra leg. The examples, tests,
-  docs and the GK field-line contract all use it. Note the GKX/GS2 `epsilon`
-  key is none of these — see `vmex/mirror/turbulence.py`;
+  docs and the GK field-line contract all use it. The GKX/GS2 `epsilon` key
+  is the field-line modulation depth `(Bmax-Bmin)/(Bmax+Bmin)` in both lanes,
+  i.e. the field-line `R_m = (1+eps)/(1-eps)` — see
+  `vmex.core.turbulence.b_modulation_depth`;
 - field-line closure assumptions;
 - where Boozer coordinates and toroidal stellarator diagnostics remain meaningful;
 - how local mirror/GK geometry is extracted.
@@ -3203,6 +3205,16 @@ internal energy normalization.
   quantities are exported as `vmex_mirror["field_line_mirror_ratio"]` and
   `["field_line_b_modulation"]`. Aligning both lanes' `epsilon` value is a
   follow-up that must touch the core lane too.
+  **Aligned (2026-09-05, #271):** both lanes now export
+  `epsilon = (Bmax-Bmin)/(Bmax+Bmin)` along the tube
+  (`vmex.core.turbulence.b_modulation_depth`: exactly GKX's `epsilon` for its
+  `1/(1 + eps cos theta)` model, and `r/R0` on a `1/R` field) and
+  `R0 = Rmajor_p = volume_p/(2 pi <area>)` (`L_axis/(2 pi)` on the mirror,
+  the same identity) instead of `L_ref`, so GKX's derived `aminor = eps * R0`
+  is a length. No benchmark or golden artifact pinned the old `std/mean`
+  value; only `tests/mirror/test_turbulence.py` did, and it now pins the
+  modulation depth, as does `tests/test_turbulence.py` (which also checks the
+  depth against `sqrt(s) L_ref/R0` on the circular vacuum tokamak).
 - 31.4-R4 The hybrid has no mirror throats: `stellarator_mirror_section_coefficients`
   (`geometry.py:165-212`) uses constant semi-axes along the leg; all |B|
   variation comes from the returns. 18.3's "target mirror ratio in the

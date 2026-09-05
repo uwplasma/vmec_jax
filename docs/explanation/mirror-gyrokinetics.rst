@@ -75,6 +75,30 @@ normalizations are
    L_{\rm ref}=\sqrt{\frac{V}{\pi L_{\rm axis}}},\qquad
    B_{\rm ref}=\frac{2|\Psi'|}{L_{\rm ref}^2},\qquad \rho=\sqrt{s}.
 
+The scalar metadata ``epsilon`` and ``R0`` use the same definitions as the
+toroidal core lane (:func:`vmex.core.turbulence.gk_fieldline_geometry`):
+
+.. math::
+
+   \epsilon=\frac{\max|B|-\min|B|}{\max|B|+\min|B|},\qquad
+   R_0=\frac{L_{\rm axis}}{2\pi}=\frac{V}{2\pi^2L_{\rm ref}^2}.
+
+Both are what GKX means by the keys.  Its analytic geometry is
+:math:`|B|=B_0/(1+\epsilon\cos\theta)` with ``epsilon`` the inverse aspect
+ratio, and the modulation depth is exactly that :math:`\epsilon` for that
+model and for any :math:`1/R` tokamak field, while, unlike an aspect ratio, it
+exists on a straight mirror (:func:`vmex.core.turbulence.b_modulation_depth`).
+:math:`R_0` is the major radius of the circular torus with this axis length;
+the same volume identity gives VMEC's ``Rmajor_p`` on the toroidal lane.  GKX
+derives ``aminor = epsilon * R0`` and ``a_ref`` from the pair when it writes
+run artifacts, which is why ``R0`` is not :math:`L_{\rm ref}`.  Neither
+scalar enters its solver.  The field-line mirror ratio
+:math:`R_m=\max|B|/\min|B|=(1+\epsilon)/(1-\epsilon)` is exported by name as
+``vmex_mirror["field_line_mirror_ratio"]`` (the field-line member of the
+mirror-ratio definitions in :doc:`mirror-geometry`), and
+``vmex_mirror["field_line_b_modulation"]`` and ``vmex_mirror["R_major"]``
+repeat :math:`\epsilon` and :math:`R_0` under their VMEX names.
+
 At zero magnetic shear GKX interprets :math:`k_x` as the direct normalized
 radial wavenumber.  The complete perpendicular metric remains
 

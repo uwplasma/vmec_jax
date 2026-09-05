@@ -7,6 +7,14 @@ in the pull-request and release bodies and are being backfilled as
 
 ## Unreleased
 
+- Gyrokinetic flux-tube contract: the `epsilon` scalar is the field-line
+  `|B|` modulation depth `(Bmax - Bmin)/(Bmax + Bmin)` in both the core and
+  mirror lanes (`vmex.core.turbulence.b_modulation_depth`; exactly GKX's
+  inverse-aspect-ratio `epsilon` for its `1/(1 + eps cos theta)` model)
+  instead of `std|B|/mean|B|`, and `R0` is the effective major radius (the
+  wout `Rmajor_p`; `L_axis/(2 pi)` on the mirror) instead of `L_ref`, so the
+  `aminor = epsilon * R0` GKX derives when it writes run artifacts is a
+  physical minor radius. Neither scalar enters GKX's solver (#271).
 - Polish observability: the CLI announces every polish phase (state
   refinement, initial certificate, preconditioner and chart build, compile
   notice), prints one row per Gauss-Newton iteration, and closes with a
