@@ -971,6 +971,7 @@ def _solved_solovev_strong_runtime(ntor: int):
     return make_strong_root_runtime(native, adapter, mask)
 
 
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
 def test_projection_diagnostics_match_axisymmetric_case_at_ntor_one():
     """The 3-D angular reconstruction must reduce to the ntor=0 one.
 
@@ -2099,6 +2100,7 @@ def test_auto_declines_a_solve_it_priced_above_its_budget():
         assert knob in console
 
 
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
 def test_explicit_polish_never_prices_and_never_declines():
     """``POLISH = ON`` is a request, not a proposal.
 
@@ -2124,6 +2126,7 @@ def test_explicit_polish_never_prices_and_never_declines():
     assert result.polish_report.nonlinear_iterations >= 1
 
 
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
 def test_auto_within_budget_records_the_price_it_was_allowed_on():
     """A permitted AUTO still reports the prediction that permitted it."""
 
@@ -2142,6 +2145,7 @@ def test_auto_within_budget_records_the_price_it_was_allowed_on():
     assert report.auto_budget_seconds == 1.0e9
 
 
+@pytest.mark.full  # 150-310 s each on an M4: real polishes; the PR lane keeps the decline path
 def test_gauss_newton_progress_prints_live_and_changes_nothing():
     """The heartbeat must reach the console mid-solve and cost no accuracy.
 
