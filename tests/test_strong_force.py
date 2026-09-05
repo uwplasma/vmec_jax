@@ -665,10 +665,13 @@ def test_shipped_certificate_values_match_the_pre_change_baseline(case):
     shipped field as exact float64 hex, measured on the eager lane at the
     commit before the normalizations were added; both cases were bit-
     identical when the baseline was taken.  The comparison is asserted at
-    ``rtol=1e-12`` rather than on the hex because XLA promises nothing about
-    fusion across platforms (the same values shift by ~2e-13 between the
-    eager and jitted lanes here), while any real change to these formulas
-    would move them by far more than a part in 1e12.
+    ``rtol=1e-10`` rather than on the hex because XLA promises nothing about
+    fusion across platforms or versions: the same values shift by ~2e-13
+    between the eager and jitted lanes on one machine, and by 1e-12 to 4e-12
+    between the Apple-silicon machine the baseline was regenerated on and the
+    x86 CI runner (``near_axis_l2`` and ``absolute_p99`` on 2026-09-05), while
+    any real change to these formulas moves them by far more than a part in
+    1e10 -- #258's two redefinitions moved theirs by factors of 10 to 100.
     """
 
     baseline = _certificate_baseline()["cases"][case]
@@ -685,7 +688,7 @@ def test_shipped_certificate_values_match_the_pre_change_baseline(case):
     for name in _SHIPPED_CERTIFICATE_FIELDS:
         value = float(np.asarray(getattr(report, name)))
         expected = float.fromhex(baseline[name])
-        assert value == pytest.approx(expected, rel=1.0e-12, abs=0.0), (
+        assert value == pytest.approx(expected, rel=1.0e-10, abs=0.0), (
             f"{case}/{name} moved: {value.hex()} != baseline {baseline[name]}"
             " (taken at "
             f"{_certificate_baseline()['measured']['vmex_commit']}). If the"
