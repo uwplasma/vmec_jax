@@ -13,7 +13,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from .forces import MirrorEnergy, mirror_energy
-from .free_boundary import FreeBoundaryParameters, _build_free_equilibrium_problem
+from .free_boundary import (
+    FreeBoundaryParameters,
+    _build_free_equilibrium_problem,
+    reject_net_axial_current,
+)
 from .geometry import evaluate_closed_spline_axis, regularize_axis_stream_function
 from .model import MirrorBoundary, MirrorState
 from .solver import _solve_krylov_system
@@ -86,7 +90,15 @@ def spline_fixed_boundary_parameters(
     current_derivative: Array = 0.0,
     axis_coefficients: Array | None = None,
 ) -> SplineFixedBoundaryParameters:
-    """Collect native boundary, axis, flux, pressure, and current controls."""
+    """Collect native boundary, axis, flux, pressure, and current controls.
+
+    A nonzero ``current_derivative`` is admissible here.  This is the
+    fixed-boundary lane: it solves no exterior vacuum problem, so the
+    single-valued-potential limitation that rules a net axial current out of
+    the free-boundary lane does not apply.  In an open mirror ``I'(s) != 0``
+    means current closed through the end plates; on the periodic hybrid it is
+    the weak axial current that supplies the rotational transform.
+    """
 
     return SplineFixedBoundaryParameters(
         boundary_coefficients=jnp.asarray(boundary.radius_coefficients),
@@ -452,12 +464,17 @@ def free_boundary_adjoint(
 ) -> FreeBoundaryAdjointResult:
     """Differentiate a scalar through a converged axisymmetric exterior solve.
 
-    End-cut radii are fixed. Pressure-profile, flux, current, applied-field,
-    and solved lateral-shape responses follow the same primal residual.
+    End-cut radii are fixed. Pressure-profile, flux, applied-field, and solved
+    lateral-shape responses follow the same primal residual.  The current
+    control is differentiated about ``I'(s) = 0`` only: a nonzero
+    ``parameters.current_derivative`` is rejected because the primal it would
+    linearize is itself inadmissible
+    (:func:`~vmex.mirror.free_boundary.reject_net_axial_current`).
     """
 
     if not bool(result.converged):
         raise ValueError("free-boundary differentiation requires a converged result")
+    reject_net_axial_current(parameters.current_derivative)
     grid = discretization.grid
     if grid.ntheta != 1:
         raise ValueError("free-boundary adjoint currently supports axisymmetry only")

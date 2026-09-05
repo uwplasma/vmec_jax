@@ -287,9 +287,28 @@ class RotatingEllipseParaxial:
 class StraightFieldLineMirror:
     """Agren-Savenko marginal-minimum-B vacuum field through paraxial order.
 
-    The scalar potential is their Eq. (2), truncated at relative order
-    ``(radius/axial_scale)^4``. Use only for ``|z| < axial_scale`` and a thin
-    flux tube.
+    The scalar potential is the second-order paraxial potential of the
+    marginally stable minimum-B field derived in
+
+        O. Agren and N. Savenko, *Magnetic mirror minimum B field with optimal
+        ellipticity*, Phys. Plasmas 11, 5041 (2004),
+        https://doi.org/10.1063/1.1799351
+
+    truncated at relative order ``(radius/axial_scale)^4``, which is where that
+    derivation itself stops.  Its on-axis field ``B0/(1 - z^2/c^2)``, its
+    ellipticity ``(1+|z/c|)/(1-|z/c|)``, and its straight nonparallel field
+    lines ``x = x0 (1 + z/c)``, ``y = y0 (1 - z/c)`` all come from the same
+    paper.  The Cartesian-like Clebsch labels ``(x0, y0)`` implemented in
+    :meth:`clebsch_labels`, and the proof that the marginal minimum-B field has
+    quadrupolar (untwisted) symmetry up to a rigid rotation, are
+
+        O. Agren and N. Savenko, *Rigid rotation symmetry of a marginally
+        stable minimum B field and analytical expressions of the flux
+        coordinates*, Phys. Plasmas 12, 042505 (2005),
+        https://doi.org/10.1063/1.1870002
+
+    Use only for ``|z| < axial_scale`` and a thin flux tube: the field is an
+    exact equilibrium only to order ``(a/c)^2``.
     """
 
     center_field: float = 1.0

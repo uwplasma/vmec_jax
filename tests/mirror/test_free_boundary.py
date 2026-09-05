@@ -19,11 +19,16 @@ from vmex.mirror import (  # noqa: E402
     SplineMirrorDiscretization,
     SplineMirrorState,
     solve_beta_scan,
+    solve_free_boundary,
 )
 import vmex.mirror.free_boundary as continuation  # noqa: E402
 from vmex.mirror.free_boundary import (  # noqa: E402
+    FreeBoundaryParameters,
     _build_free_equilibrium_problem,
+    reject_net_axial_current,
 )
+from vmex.mirror.forces import mirror_energy  # noqa: E402
+from vmex.mirror.implicit import free_boundary_adjoint  # noqa: E402
 from vmex.mirror.output import (  # noqa: E402
     FreeBoundaryRestart,
     load_free_boundary_restart,
@@ -152,6 +157,118 @@ def test_free_coefficient_operator_matches_dense_forward_and_transpose() -> None
         rtol=2.0e-13,
         atol=2.0e-13,
     )
+
+
+def _small_free_problem(current_derivative):
+    """Build the smallest coupled problem used by the net-current tests."""
+
+    config = MirrorConfig(
+        resolution=MirrorResolution(ns=5, mpol=0, nxi=7),
+        z_min=-0.8,
+        z_max=0.8,
+    )
+    discretization = SplineMirrorDiscretization.build_cgl(config, elements=2, quadrature_order=3)
+    nodes = jnp.asarray(discretization.spline.collocation_nodes)
+    boundary = SplineMirrorBoundary((0.24 * (1.0 - 0.08 * nodes**2))[None])
+    radius = jnp.broadcast_to(
+        boundary.radius_coefficients,
+        (discretization.grid.ns, discretization.grid.ntheta, discretization.coefficient_count),
+    )
+    state = SplineMirrorState(radius, jnp.zeros_like(radius))
+    problem = _build_free_equilibrium_problem(
+        boundary,
+        state,
+        discretization,
+        _external_mirror_field,
+        axial_flux_derivative=0.0024,
+        mass_profile=0.0,
+        current_derivative=current_derivative,
+        solve_lambda=False,
+        gamma=5.0 / 3.0,
+        target_central_pressure=None,
+        initial_mass_scale=1.0,
+        exterior_ntheta=8,
+        exterior_order=4,
+        exterior_spectral_side_density=True,
+    )
+    return config, discretization, boundary, state, problem
+
+
+def test_free_boundary_entry_points_reject_a_net_axial_current() -> None:
+    """31.4-R2: a net axial current is inadmissible in the free-boundary lane."""
+
+    config, source_grid, discretization, grid, on_axis, center, flux, boundary = _free_case(5, 7, 2, 5)
+    spline_boundary = discretization.fit_boundary(boundary, source_grid)
+    message = "net axial plasma current"
+
+    with pytest.raises(ValueError, match=message):
+        solve_free_boundary(
+            spline_boundary,
+            discretization,
+            config,
+            _external_mirror_field,
+            axial_flux_derivative=flux,
+            current_derivative=1.0e-6,
+        )
+    with pytest.raises(ValueError, match=message):
+        solve_beta_scan(
+            spline_boundary,
+            discretization,
+            config,
+            _external_mirror_field,
+            jnp.asarray([0.0]),
+            axial_flux_derivative=flux,
+            reference_field=float(on_axis[center]),
+            current_derivative=jnp.asarray(3.0e-4),
+        )
+    with pytest.raises(ValueError, match=message):
+        _small_free_problem(2.0e-5)
+    with pytest.raises(ValueError, match=message):
+        free_boundary_adjoint(
+            SimpleNamespace(converged=True),
+            FreeBoundaryParameters(
+                _external_mirror_field,
+                jnp.asarray(flux),
+                jnp.asarray(0.0),
+                jnp.asarray(5.0e-5),
+            ),
+            discretization,
+            lambda *_args: 0.0,
+        )
+    # A radial profile of exact zeros stays admissible, scalar or per surface.
+    reject_net_axial_current(0.0)
+    reject_net_axial_current(jnp.zeros(grid.ns))
+    # A traced control carries no value to test and must not raise.
+    jax.jit(lambda value: (reject_net_axial_current(value), value)[1])(1.0)
+
+
+def test_exterior_vacuum_has_no_azimuthal_field_while_a_net_current_adds_one() -> None:
+    """31.4-R2: the two sides of the interface residual would disagree.
+
+    The exterior is a single-valued potential decaying at infinity on a closed
+    Green surface, so the field it adds to the applied field is exactly
+    meridional: no ``phi``-hat component at any lateral node. The plasma-side
+    ``B^2`` that the same residual balances does gain one as soon as
+    ``I'(s) != 0``. The guard therefore protects a real inconsistency.
+    """
+
+    _config, _discretization, _boundary, _state, problem = _small_free_problem(0.0)
+    grid = problem.vectorizer.discretization.grid
+    point = jnp.asarray(problem.vectorizer.pack())
+    *_head, _surface, vacuum = problem.components_function(point)
+
+    # Lateral nodes are sampled at theta = 0, where phi-hat is the y axis.
+    lateral = np.asarray(vacuum.lateral_field_xyz)
+    applied = np.asarray(_external_mirror_field(vacuum.surface.lateral_xyz[0]))
+    np.testing.assert_array_equal(lateral[:, 1] - applied[:, 1], np.zeros(lateral.shape[0]))
+
+    evaluated = problem.vectorizer.discretization.evaluate_state(problem.vectorizer.unpack(point)[1])
+    without = mirror_energy(evaluated, grid, axial_flux_derivative=0.0024, current_derivative=0.0)
+    with_current = mirror_energy(evaluated, grid, axial_flux_derivative=0.0024, current_derivative=2.0e-4)
+    edge_without = np.asarray(without.b_squared[-1])
+    edge_with = np.asarray(with_current.b_squared[-1])
+    assert np.all(edge_with > edge_without)
+    assert np.max(edge_with / edge_without - 1.0) > 1.0e-6
 
 
 @pytest.mark.full

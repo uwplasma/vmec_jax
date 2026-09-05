@@ -263,7 +263,8 @@ The package currently includes:
   tracing.
 
 With the compact-coil configuration (0.5 m loops, vacuum ``B(0) = 0.0836 T``,
-mirror ratio 4.58), a requested 50% beta continuation grows the central radius
+vacuum ``R_m,axis = 4.58`` -- see `Reported mirror ratios and lengths`_ --),
+a requested 50% beta continuation grows the central radius
 by 7.5% and lowers the on-axis field by 22.3% from vacuum, exercising the
 finite-beta coupling end to end. The axisymmetric free-boundary path is
 **supported through 10% requested beta**. The 25% and 50% points are retained
@@ -500,7 +501,7 @@ solve basis, wraps it in a constant circular section (rotation-invariant, so the
 large frame holonomy of a fully 3-D axis does not enter the boundary), and
 returns a ``StellaratorMirrorSetup`` that feeds ``solve_fixed_boundary`` like the
 analytic racetrack. The solved hybrid is divergence-free to ``9.4e-14`` with
-``iota = 0.11`` and mirror ratio ``1.8``; its normalized strong-force residual is
+``iota = 0.11`` and ``R_m,LCFS = 1.8``; its normalized strong-force residual is
 ``1.3e-2`` (the smooth analytic racetrack, with circular returns, converges to
 ``2.6e-3`` by contrast -- the QI returns' finite curvature and the four
 curvature-break seams still load the force). This B-spline
@@ -573,21 +574,34 @@ samples and verify that the order-``r`` ``m=1`` field strength is zero. This is
 the coefficient oracle for the native-spline fixed-boundary solve; it is not
 itself an equilibrium.
 
-``StraightFieldLineMirror`` implements the Agren-Savenko paraxial scalar
-potential, on-axis field, Clebsch labels, straight nonparallel field lines,
-and analytic elliptical sections. Its tests verify curl-free field, the
-expected order-``(a/c)^2`` solenoidal and field-line truncation errors, axial
-flux conservation, and
+``StraightFieldLineMirror`` implements the straight-field-line mirror (SFLM)
+of Ågren and Savenko: the marginally stable minimum-:math:`B` vacuum field
+whose flux lines are straight but nonparallel. The second-order paraxial
+scalar potential, the on-axis field, the ellipticity, and the straight field
+lines :math:`x = x_0(1 + z/c)`, :math:`y = y_0(1 - z/c)` are all from `Magnetic
+mirror minimum B field with optimal ellipticity
+<https://doi.org/10.1063/1.1799351>`_ (Phys. Plasmas **11**, 5041, 2004); the
+Cartesian-like Clebsch labels :math:`(x_0, y_0)` used by
+``clebsch_labels``, and the proof that the marginal minimum-:math:`B` field is
+quadrupolar up to a rigid rotation, are from `Rigid rotation symmetry of a
+marginally stable minimum B field and analytical expressions of the flux
+coordinates <https://doi.org/10.1063/1.1870002>`_ (Phys. Plasmas **12**,
+042505, 2005). VMEX truncates the potential at relative order
+:math:`(a/c)^4`, where the 2004 derivation itself stops. Its tests verify
+curl-free field, the expected order-``(a/c)^2`` solenoidal and field-line
+truncation errors, axial flux conservation, and
 
 .. math::
 
    B_0(z)=\frac{B_0(0)}{1-z^2/c^2}, \qquad
    \mathcal E(z)=\frac{1+|z/c|}{1-|z/c|}.
 
-Both fixtures require a thin tube and ``|z|<c``. The long-thin ordering treats
-``beta`` and ``lambda=(a/L)^2`` as simultaneous small parameters;
-``B/B_vac=sqrt(1-beta)`` is an asymptotic pressure-balance reference, not a
-finite-beta solution or ellipticity prediction.
+Both fixtures require a thin tube and ``|z|<c``. The long-thin ordering
+expands in :math:`(a/L)^2` alone: :math:`\beta` is *not* a second small
+parameter, and ``B/B_vac = sqrt(1-beta)`` is the leading-order pressure-balance
+relation at any :math:`\beta < 1` (see `Interpreting beta`_ below). It is an
+asymptotic equilibrium reference, not a finite-beta solution or an ellipticity
+prediction.
 
 Native spline basis status
 --------------------------
@@ -684,8 +698,10 @@ release-candidate nonaxisymmetric fixed-boundary case.
 infers :math:`\Psi'(s)` from the surface-averaged axial flux, and obtains the
 nonzero poloidal stream-function modes from the remaining contravariant field.
 It accepts either Cartesian field samples or a point callable and performs no
-coil construction or Biot--Savart integration. The independent Agren--Savenko
-field is a paraxial-accuracy benchmark: it is an exact equilibrium only to
+coil construction or Biot--Savart integration. The independent Ågren--Savenko
+SFLM field (`Phys. Plasmas 11, 5041 (2004)
+<https://doi.org/10.1063/1.1799351>`_) is a paraxial-accuracy benchmark: it is
+an exact equilibrium only to
 order :math:`(a/c)^2` (its solenoidal residual is :math:`O((a/c)^2)\approx
 1.6\times10^{-3}`), so it is gated on its clean unconstrained bulk force and
 on the refinement convergence of that force, not on a single all-volume
@@ -782,6 +798,61 @@ SOLVAX solver's first compiled solve. Fixed- and free-boundary derivatives
 solve the linearized converged coefficient residual and never retain or
 differentiate the nonlinear iteration history.
 
+Reported mirror ratios and lengths
+----------------------------------
+
+"Mirror ratio" and "mirror length" have no single conventional meaning, so
+VMEX pins four quantities in :mod:`vmex.mirror.metrics` and every example,
+test and doc page in the mirror lane reports those and nothing else. All four
+are host-side diagnostics built from discrete extrema; they are not
+differentiable.
+
+:math:`R_{m,\rm axis}` (per leg)
+   :math:`\max|B| / \min|B|` on the magnetic axis over one :math:`|B|` well,
+   the well being the axial interval between the two :math:`|B|` maxima that
+   bound its minimum. An open mirror has one well; the periodic hybrid has one
+   per straight leg, which is why it is reported per leg. On an open mirror the
+   two ends of the modelled grid count as bounding maxima, since the coils
+   usually sit outside the grid.
+
+:math:`R_{m,\rm LCFS}`
+   :math:`\max|B| / \min|B|` over the last closed flux surface. It is a
+   different number from :math:`R_{m,\rm axis}` on any shaped boundary, and is
+   always reported separately rather than as "the" mirror ratio.
+
+:math:`L_{\rm mirror,B}` (per leg)
+   The arc-length distance between the two :math:`|B|` maxima bounding a well:
+   the length of the mirror cell as the field measures it, not as the device
+   does.
+
+:math:`L_{\rm straight}`
+   The arc length over which the axis curvature is negligible (below a
+   fraction ``tolerance`` of the largest curvature on the axis, default
+   ``1e-3``), reported with its individual spans. It is a geometric quantity
+   and is unrelated to :math:`L_{\rm mirror,B}` unless the :math:`|B|` maxima
+   happen to fall at the leg ends.
+
+Wells shallower than 5% of the total on-axis :math:`|B|` swing are merged into
+their neighbours by persistence pruning, so sampling ripple in a solved
+:math:`|B|` is not reported as an extra leg. On the shipped racetrack hybrid
+this reduces 12 apparent wells to the 2 real ones, which also makes 31.4-R4
+measurable: the legs carry :math:`R_{m,\rm axis} \approx 1.003` -- they have no
+throat, because the leg semi-axes are constant -- while the shaped returns give
+:math:`R_{m,\rm LCFS} \approx 2.45`. The spline's cubic local support rounds
+each leg-return junction, so the exactly straight arc is
+:math:`L_{\rm straight} = 11.50` m rather than the nominal :math:`2 \times 8`
+m.
+
+Two related quantities elsewhere in VMEX are deliberately *not* mirror ratios.
+:func:`vmex.core.optimize.mirror_ratio` is the ``|B|`` modulation depth
+:math:`(B_{\max}-B_{\min})/(B_{\max}+B_{\min})` on one surface, the QI
+optimization knob, related by :math:`R_m = (1+m)/(1-m)`. And the ``epsilon``
+key of the gyrokinetic flux-tube contract is ``std(|B|)/mean(|B|)``, the VMEX
+convention shared with the toroidal core lane; GS2-family codes mean the
+inverse aspect ratio by that key, which a straight mirror does not have. The
+field-line mirror ratio is exported explicitly as
+``vmex_mirror["field_line_mirror_ratio"]``.
+
 Interpreting beta
 -----------------
 
@@ -801,7 +872,18 @@ not imply a 10% edge-pressure jump or volume beta.
 * local central beta normalized by the solved plasma field,
 * center radius and plasma/vacuum-side field,
 * diamagnetic field ratio, and
-* error against the paraxial estimate ``B/B_vac = sqrt(1-beta)``.
+* error against the long-thin relation ``B/B_vac = sqrt(1-beta)``.
+
+That relation is not a small-:math:`\beta` expansion. It is Eq. (30) of Ryutov
+*et al.*, `Magneto-hydrodynamically stable axisymmetric mirrors
+<https://doi.org/10.1063/1.3624763>`_ (Phys. Plasmas **18**, 092301, 2011): the
+leading-order term of the long-thin (paraxial) expansion in
+:math:`(a/L)^2`, exact in :math:`\beta` for any :math:`\beta < 1`. Its accuracy
+is therefore set by the aspect of the device, not by how large :math:`\beta`
+is. For the shipped two-coil case the plasma radius is :math:`a \approx 0.25`
+m and the axial scale over which the vacuum field varies is the half coil
+separation :math:`L = 1.0` m, so :math:`(a/L)^2 \approx 6\%` -- the same size
+as the deviation actually observed at 50% :math:`\beta` below.
 
 At the fine combined grid ``(ns,nxi,ntheta_panel)=(9,17,16)``, the default 10%
 request reaches 10% central beta and 3.39% volume beta. The center radius
@@ -811,8 +893,12 @@ profile.
 
 On that (legacy device-length-normalized) grid the 50% point reaches center
 radius ``0.272554 m``, field ratio ``0.762687``, and volume beta ``0.216984``
-with nonlinear residual ``8.31e-13``. The paraxial small-beta estimate is
-intentionally shown but is not an accuracy reference at 50%. This coarser-grid
+with nonlinear residual ``8.31e-13``. The solved ratio sits ``7.9%`` above the
+long-thin value :math:`\sqrt{1-\beta} = 0.7071`. That gap is the expected size
+of the neglected :math:`O((a/L)^2)\approx 6\%` correction, not evidence that
+the relation fails at large :math:`\beta`: the long-thin relation is shown as
+the leading-order reference it is, and the solve is the finite-aspect answer.
+This coarser-grid
 strong-force reconstruction is what originally held 50% at validation status;
 it is superseded by the ``(13,25,13,24)`` fine-grid promotion run, which
 converges every point 0–50% below the minor-radius bulk gate.

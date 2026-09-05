@@ -125,6 +125,91 @@ surface integrals above under refinement. The lateral test evaluates a
 solved equilibrium, where $\mathbf{F} \approx 0$ makes the total derivative
 equal the natural term.
 
+## The exterior boundary-value problem
+
+The free-lateral-boundary lane closes the plasma with a *Green surface*
+$S = S_{\rm lat} \cup S_- \cup S_+$: the lateral LCFS plus two graded end
+disks. $S$ is a topological sphere, and the vacuum domain is the unbounded
+exterior $E = \mathbb{R}^3 \setminus \overline{\Omega}$. Write the vacuum field
+as the applied coil field plus a correction potential,
+
+$$
+\mathbf{B}_{\rm vac} = \mathbf{B}_{\rm ext} + \nabla\Phi ,
+\qquad \nabla^2\Phi = 0 \ \text{in } E,
+\qquad \Phi = O(|\mathbf{x}|^{-1}) \ \text{as } |\mathbf{x}| \to \infty .
+$$
+
+With $\mathbf{n}$ the unit normal pointing out of the plasma into the vacuum,
+the Neumann data $g = \mathbf{n}\cdot\nabla\Phi$ are
+
+$$
+g = -\,\mathbf{n}\cdot\mathbf{B}_{\rm ext} \quad\text{on } S_{\rm lat},
+\qquad
+g = -\,\mathbf{n}\cdot\mathbf{B}_{\rm ext}
+    \;+\; \mathbf{n}\cdot\mathbf{B}_{\rm plasma} \quad\text{on } S_\pm .
+$$
+
+The lateral row is the interface condition $\mathbf{B}\cdot\mathbf{n} = 0$; the
+cap rows continue the plasma's axial through-flux into free space, because the
+caps are a mathematical closure, not a material interface, and carry no
+pressure-balance condition.
+
+**This problem is uniquely solvable as written.** The exterior Neumann problem
+with decay at infinity has exactly one solution for arbitrary data: the
+$O(1/r)$ monopole term absorbs the net flux, so there is neither a solvability
+condition on $g$ nor an additive-constant gauge freedom to fix. (Both of those
+belong to the *interior* Neumann problem, where $\oint_S g\,dA = 0$ is required
+and the solution is unique only up to a constant.) `LaplaceNeumannResult`
+accordingly reports `gauge_error` as an identical zero.
+
+What *is* enforced is a different, physical consistency requirement. A magnetic
+field is solenoidal, so the exact data satisfy $\oint_S g\,dA = 0$; a nonzero
+discrete value would be a spurious magnetic monopole inside $S$. The discrete
+lateral and cap data are built from different interpolants and do not cancel to
+round-off on their own, so `_balance_neumann_on_caps` adds one constant to the
+*cap* rows only — the physical lateral $\mathbf{B}\cdot\mathbf{n}$ data are
+untouched, which `test_axisymmetric_neumann_balance_changes_only_artificial_caps`
+checks. `compatibility_error` and `raw_compatibility_error` report the residual
+net flux after and before that projection.
+
+**Discretization.** $S$ is triangulated (lateral quadrilaterals split in two,
+caps graded toward the rim) and the direct boundary-integral identity is
+collocated at the mesh vertices. With $G(\mathbf{x},\mathbf{y}) =
+1/(4\pi|\mathbf{x}-\mathbf{y}|)$, the equation solved at each collocation point
+$\mathbf{x}\in S$ is
+
+$$
+\Phi(\mathbf{x})
+ + \int_S G(\mathbf{x},\mathbf{y})\, g(\mathbf{y}) \; dA_{\mathbf y}
+ - \int_S \bigl[\Phi(\mathbf{y}) - \Phi(\mathbf{x})\bigr]\,
+   \frac{\partial G}{\partial n_{\mathbf y}}(\mathbf{x},\mathbf{y}) \; dA_{\mathbf y}
+ \;=\; 0 .
+$$
+
+Subtracting $\Phi(\mathbf{x})$ inside the double-layer integral makes constants
+an exact null direction of the operator and removes the need to assume the
+smooth-surface $1/2$ jump coefficient, which does not hold at the cap rims
+where the surface has an edge. Both layer integrals are evaluated with Duffy's
+vertex transform: each incident triangle is rotated so the collocation vertex is
+Duffy's singular vertex, and the $1/r$ and $1/r^2$ kernels become bounded
+integrands on the unit square under tensor Gauss-Legendre quadrature. The
+resulting dense system in the symmetry-reduced unknowns is formed by
+`jax.jacfwd` of the residual and solved directly, so the whole exterior response
+is differentiable.
+
+**Relation to NESTOR.** The physical problem — an ideal-MHD plasma-vacuum
+interface closed by an exterior Neumann problem for a scalar potential — is the
+one solved for stellarators by Merkel and by Hirshman, van Rij and Merkel
+(references below). The numerics here are not NESTOR's: NESTOR works on a
+toroidal surface in a Fourier basis, with an analytic singularity subtraction
+and a net-toroidal-current filament folded into $\mathbf{B}_{\rm ext}$, while
+this lane uses a triangulated topologically spherical surface with mathematical
+end caps, Duffy quadrature and vertex collocation. The missing filament is
+exactly why a net axial plasma current is inadmissible here: a single-valued
+potential on a simply connected exterior carries no azimuthal field, so
+`solve_free_boundary` and its relatives reject `current_derivative != 0`
+({func}`~vmex.mirror.free_boundary.reject_net_axial_current`).
+
 ## Axis regularity audit
 
 A single-valued smooth scalar has poloidal Fourier coefficients that behave
@@ -216,6 +301,15 @@ The isotropic acceptance items and where each is checked:
 - S. P. Hirshman and J. C. Whitson, *Steepest-descent moment method for
   three-dimensional magnetohydrodynamic equilibria*, Phys. Fluids 26, 3553
   (1983). <https://doi.org/10.1063/1.864116>
+- P. Merkel, *An integral equation technique for the exterior and interior
+  Neumann problem in toroidal regions*, J. Comput. Phys. 66, 83 (1986).
+  <https://doi.org/10.1016/0021-9991(86)90055-0>
+- S. P. Hirshman, W. I. van Rij and P. Merkel, *Three-dimensional free boundary
+  calculations using a spectral Green's function method*, Comput. Phys. Commun.
+  43, 143 (1986). <https://doi.org/10.1016/0010-4655(86)90058-5>
+- M. G. Duffy, *Quadrature over a pyramid or cube of integrands with a
+  singularity at a vertex*, SIAM J. Numer. Anal. 19, 1260 (1982).
+  <https://doi.org/10.1137/0719090>
 - W. A. Cooper et al., *3D magnetohydrodynamic equilibria with anisotropic
   pressure*, Comput. Phys. Commun. 72, 1 (1992).
   <https://doi.org/10.1016/0010-4655(92)90002-G>

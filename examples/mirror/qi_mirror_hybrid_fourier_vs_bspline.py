@@ -64,6 +64,7 @@ from vmex.mirror import (
 )
 from vmex.mirror.basis import CubicBSplineBasis
 from vmex.mirror.geometry import magnetic_field_squared
+from vmex.mirror.metrics import closed_axis_arc, mirror_ratio_diagnostics
 
 # --------------------------- parameters ------------------------------------
 INPUT_FILE = REPO_ROOT / "examples" / "data" / "input.nfp2_QI"
@@ -263,13 +264,25 @@ def main() -> None:  # noqa: PLR0915 - a single linear example script
         evaluated.energy.field, evaluated.energy.geometry)), 0.0))
     b_axis = float(mod_b[0].mean())
     b_lcfs_min, b_lcfs_max = float(mod_b[-1].min()), float(mod_b[-1].max())
+    # One definition, shared with the open-mirror examples: R_m,axis per leg
+    # over its own |B| well, R_m,LCFS separately, L_mirror,B between the two
+    # bounding |B| maxima, and L_straight from the axis curvature.
+    arc, period = closed_axis_arc(setup.axis)
+    ratios = mirror_ratio_diagnostics(
+        mod_b[0].mean(axis=0), arc, period=period,
+        lcfs_field_strength=mod_b[-1],
+        axis_curvature=np.asarray(setup.axis.curvature),
+    )
     print("\n--- B-spline mirror-hybrid equilibrium ---")
     print(f"converged={bool(evaluated.converged)}  iterations={int(evaluated.iterations)}")
     print(f"  force normalized rms = {float(evaluated.force.normalized_rms):.3e}")
     print(f"  divergence rms       = {float(evaluated.normalized_divergence_rms):.3e}")
     print(f"  rotational transform = {float(field_line.iota):.4f}")
-    print(f"  |B| axis={b_axis:.3f}  LCFS in [{b_lcfs_min:.3f}, {b_lcfs_max:.3f}]  "
-          f"mirror ratio={b_lcfs_max / b_lcfs_min:.2f}")
+    print(f"  |B| axis={b_axis:.3f}  LCFS in [{b_lcfs_min:.3f}, {b_lcfs_max:.3f}]")
+    print(f"  R_m,axis per leg     = {[round(x, 3) for x in ratios.axis_mirror_ratios]}")
+    print(f"  R_m,LCFS             = {ratios.lcfs_mirror_ratio:.3f}")
+    print(f"  L_mirror,B per leg   = {[round(x, 3) for x in ratios.mirror_lengths]} m")
+    print(f"  L_straight           = {ratios.straight_length:.3f} m of {period:.3f} m circuit")
 
     summary = {
         "qi_iota_axis": qi_iota_axis, "qi_iota_edge": qi_iota_edge,
@@ -288,6 +301,8 @@ def main() -> None:  # noqa: PLR0915 - a single linear example script
         "hybrid_divergence_rms": float(evaluated.normalized_divergence_rms),
         "hybrid_iota": float(field_line.iota),
         "hybrid_b_axis": b_axis, "hybrid_b_lcfs": [b_lcfs_min, b_lcfs_max],
+        "hybrid_mirror_ratios": ratios.summary(),
+        "hybrid_axis_circuit_length": period,
     }
     (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
