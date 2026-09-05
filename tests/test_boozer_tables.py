@@ -609,3 +609,32 @@ def test_refine_booz_grids_preserves_the_parity_grid_layout(asym):
     coarse_rows = int(constants.ntheta) if asym else int(constants.nu2_b)
     assert np.allclose(np.asarray(grids.theta_grid).reshape(coarse_rows, -1)[:, 0],
                        theta.reshape(rows, -1)[::factor, 0][:coarse_rows])
+
+
+def test_boozer_high_order_uses_the_symmetry_the_state_carries():
+    """``asym`` sets the transform's poloidal range; the sine families always go.
+
+    A state carrying asymmetric harmonics with ``asym=False`` integrates that
+    geometry over a half period and returns a spectrum for a plasma that does
+    not exist, with nothing said. The flag now follows the state.
+    """
+    import numpy as np
+
+    from vmex.core.omnigenity import _tables_are_asymmetric
+
+    class _State:
+        def __init__(self):
+            self.nfp = 2
+            self.R_sin = np.zeros((3, 4))
+            self.Z_cos = np.zeros((3, 4))
+
+    assert _tables_are_asymmetric(_State()) is False
+
+    poloidal = _State()
+    poloidal.R_sin[1, 2] = 1.0e-6
+    assert _tables_are_asymmetric(poloidal) is True
+
+    # either family is enough, at any magnitude
+    vertical = _State()
+    vertical.Z_cos[0, 0] = -2.0e-8
+    assert _tables_are_asymmetric(vertical) is True

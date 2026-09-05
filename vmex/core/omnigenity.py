@@ -205,6 +205,27 @@ def _boozer_kernel_state(state, rt, *, rows, s_half, mboz, nboz, oversample):
     }
 
 
+def _tables_are_asymmetric(state) -> bool:
+    """True when a high-order state carries stellarator-asymmetric harmonics.
+
+    ``asym`` decides the poloidal integration range of the Boozer transform
+    (half period when symmetric, full when not), while the sine families are
+    handed to the kernel either way.  Requesting ``asym=False`` for a state
+    that carries them therefore integrates asymmetric geometry over a half
+    period and returns a spectrum for a plasma that does not exist.  Traced
+    arrays cannot be inspected, so there the caller's declaration stands.
+    """
+    import jax
+
+    for family in (state.R_sin, state.Z_cos):
+        array = jnp.asarray(family)
+        if isinstance(array, jax.core.Tracer):
+            continue
+        if bool(np.any(np.asarray(array) != 0.0)):
+            return True
+    return False
+
+
 def boozer_spectrum_high_order(
     state,
     *,
@@ -225,6 +246,7 @@ def boozer_spectrum_high_order(
     surface_values = np.atleast_1d(np.asarray(surfaces, dtype=float))
     if np.any((surface_values <= 0.0) | (surface_values > 1.0)):
         raise ValueError("surfaces must satisfy 0 < s <= 1")
+    asym = bool(asym) or _tables_are_asymmetric(state)
     tables = [
         high_order_boozer_input_tables(
             state,
@@ -240,7 +262,7 @@ def boozer_spectrum_high_order(
         nfp=int(state.nfp),
         mboz=int(mboz),
         nboz=int(nboz),
-        asym=bool(asym),
+        asym=asym,
         xm=first["xm"],
         xn=first["xn"],
         xm_nyq=first["xm_nyq"],
