@@ -36,8 +36,9 @@ the remaining physics and distributed solver work is not yet implemented.
   A's remaining acceptance, benchmark and admissibility tasks.
 - **Completed (2026-09-05 UTC):** implement nonlinear stationarity eligibility for
   implicit polish derivatives. Resume `/Users/rogeriojorge/local/vmex-stationarity`,
-  branch `fix/polish-stationarity-certificate`, based on `6e365a6f` / PR #270.
-  Source, regression tests and documentation are validated locally. All
+  branch `fix/polish-stationarity-certificate`, implementation `9087241b`,
+  [PR #277](https://github.com/uwplasma/vmex/pull/277), based on `6e365a6f` / #270.
+  Source, regression tests and documentation are validated locally; CI is pending. All
   commits use author `rogeriojorge`; preserve original user worktrees.
 - **Merge audit:** #267 marked ready for review. Main requires one approving
   GitHub review (ruleset 20655590); none exists. Repository auto-merge is disabled
@@ -83,9 +84,10 @@ the remaining physics and distributed solver work is not yet implemented.
   `vmex-review-evidence-20260905/pr269-coverage` and `pr270-coverage`; the
   stationary MHD probe and log are in their parent evidence directory. Never lower coverage targets
   or weaken force/derivative thresholds to obtain a passing badge.
-- **Next:** commit/push this checkpoint on #270, integrate sibling #273 as CI
-  permits, and merge only once checks and required review are satisfied. Then continue A's export/resume acceptance, admissibility and
-  benchmark repairs before the B/C physics and recovery work.
+- **Next:** inspect CI/reviews for #273 and #277; integrate the sibling fixture
+  repair into the stack as appropriate and merge in dependency order only once
+  checks and required review are satisfied. Continue A's export/resume acceptance,
+  admissibility and benchmark repairs before the B/C physics and recovery work.
 
 ## 1. Outcome and order of work
 
