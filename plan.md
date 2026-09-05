@@ -1540,7 +1540,7 @@ status and never blocks.
 
 | Step | PR | State on 2026-09-05 | Action before merge |
 |---|---|---|---|
-| 1 | #267 → #268 → #269 → #270 | green; stacked | Merge in stack order; this revision is stacked on #270 |
+| 1 | #267 → #268 → #269 → #270 | **merged 2026-09-05** (b19e4cc3, 62e64f1f, edd4c2fd, 7c2ebc12) after the post-squash rebase of each stacked branch; this revision is now based on main | — |
 | 2 | #264 LASYM/Solov'ev | green | Merge |
 | 3 | #263 mirror audit | green | Merge; rebase only if plan.md conflicts with step 1 |
 | 4 | #262 failure policy | green | Merge |

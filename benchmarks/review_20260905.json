@@ -609,7 +609,7 @@
         },
         "stages": {},
         "peak_rss_bytes": 168394752,
-        "error": "workflow F9 needs essos.surfaces.surfacerzfourier_from_boundary (an ESSOS build with the VMEX optimization interfaces; the released wheel lacks it \u2014 the same gate as the single-stage examples)"
+        "error": "workflow F9 needs essos.surfaces.surfacerzfourier_from_boundary (an ESSOS build with the VMEX optimization interfaces; the released wheel lacks it — the same gate as the single-stage examples)"
       },
       {
         "workflow": "M1",
@@ -1030,7 +1030,7 @@
         },
         "stages": {},
         "peak_rss_bytes": 788295680,
-        "error": "workflow F9 needs essos.surfaces.surfacerzfourier_from_boundary (an ESSOS build with the VMEX optimization interfaces; the released wheel lacks it \u2014 the same gate as the single-stage examples)"
+        "error": "workflow F9 needs essos.surfaces.surfacerzfourier_from_boundary (an ESSOS build with the VMEX optimization interfaces; the released wheel lacks it — the same gate as the single-stage examples)"
       },
       {
         "workflow": "M1",
