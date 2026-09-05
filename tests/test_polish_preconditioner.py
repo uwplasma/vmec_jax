@@ -2248,3 +2248,42 @@ def test_declined_auto_does_not_warn_under_the_warn_fail_policy(tmp_path):
         warnings.simplefilter("error", RuntimeWarning)
         result = solve_file(path, write_wout=False)
     assert result.polish_report.termination_reason == "auto-declined-cost"
+def test_polish_derivative_failure_is_nan_under_tracing_and_raises_outside():
+    """``fail_policy="raise"`` cannot raise on a traced convergence flag.
+
+    Outside jit the policy raises; under jit the flag is a tracer, so both
+    policies return NaN. The docstring says so, and this pins it: a jitted
+    gradient that fails comes back as NaN, never as an exception.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    from vmex.core.polish_implicit import (
+        PolishLinearConfig, PolishLinearReport, StrongForceLinearSolveError,
+        _checked_solution,
+    )
+
+    def report(converged):
+        return PolishLinearReport(
+            residual_norm=jnp.asarray(1.0), tolerance=jnp.asarray(1.0e-8),
+            iterations=jnp.asarray(30), converged=converged)
+
+    value = jnp.ones(3)
+    raising = PolishLinearConfig(fail_policy="raise")
+
+    # eager, failed: the documented exception
+    with pytest.raises(StrongForceLinearSolveError):
+        _checked_solution(value, report(jnp.asarray(False)), raising, "tangent")
+    # eager, converged: the value passes through
+    ok = _checked_solution(value, report(jnp.asarray(True)), raising, "tangent")
+    assert bool(jnp.all(ok == value))
+
+    # traced, failed: NaN, no exception, whatever the policy says.  The
+    # conftest disables jit suite-wide, so ask for it explicitly here --
+    # which is also why the interpreted suite never exercised this path.
+    def traced(flag):
+        return _checked_solution(value, report(flag), raising, "tangent")
+
+    with jax.disable_jit(False):
+        assert bool(jnp.all(jnp.isnan(jax.jit(traced)(jnp.asarray(False)))))
+        assert bool(jnp.all(jax.jit(traced)(jnp.asarray(True)) == value))

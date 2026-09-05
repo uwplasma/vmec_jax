@@ -30,7 +30,19 @@ from .strong_force import HighOrderEquilibriumState
 
 @dataclass(frozen=True)
 class PolishLinearConfig:
-    """Krylov controls and failure policy for polished-root derivatives."""
+    """Krylov controls and failure policy for polished-root derivatives.
+
+    ``fail_policy`` decides what a non-converged Krylov solve produces:
+    ``"raise"`` (the default) raises :class:`StrongForceLinearSolveError`,
+    ``"nan"`` returns NaN. **The raise only happens outside tracing.** Under
+    ``jax.jit`` -- which is where these derivatives are normally taken -- the
+    convergence flag is a traced value, so no Python exception can be raised
+    from it and both policies return NaN through :func:`jnp.where`. A jitted
+    gradient that fails therefore comes back as NaN, not as an error; check
+    for it rather than relying on an exception. Making it raise would need a
+    host callback in the traced graph, which would stop those programs being
+    written to the persistent compilation cache.
+    """
 
     rtol: float = 1.0e-8
     atol: float = 1.0e-11
