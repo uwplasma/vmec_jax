@@ -40,11 +40,39 @@ from vmex.core.polish_driver import (
     polish_strong_root,
 )
 from vmex.core.radial_basis import BSplineBasis
-from vmex.core.strong_force import certify_strong_force, lift_high_order_state
+from vmex.core.strong_force import (
+    certify_strong_force,
+    force_error_record,
+    lift_high_order_state,
+)
 
-from _provenance import assert_repo_vmex, git_state
+from _provenance import assert_repo_vmex, file_sha256, git_state
 
 DATA = REPO / "examples" / "data" / "input.solovev"
+
+
+def _redacted_argv(argv: list[str]) -> list[str]:
+    """Return the invocation with the ``--output`` destination reduced.
+
+    A committed record must be reproducible without disclosing where it was
+    produced, so only the destination's file name survives.  Both the
+    ``--output path`` and ``--output=path`` spellings are handled.
+    """
+
+    redacted: list[str] = []
+    take_next = False
+    for token in argv:
+        if take_next:
+            redacted.append(Path(token).name)
+            take_next = False
+        elif token == "--output":
+            redacted.append(token)
+            take_next = True
+        elif token.startswith("--output="):
+            redacted.append(f"--output={Path(token.split('=', 1)[1]).name}")
+        else:
+            redacted.append(token)
+    return redacted
 
 
 def _peak_rss_mib() -> float:
@@ -444,12 +472,18 @@ def main() -> None:
                 "module": solvax_module.relative_to(solvax_repo).as_posix(),
             }
     report = {
-        "schema": "vmex.strong-polish-benchmark/1",
+        "schema": "vmex.strong-polish-benchmark/2",
         # The exact invocation: committed evidence must be re-runnable
-        # verbatim, not reverse-engineered from recorded fields.
+        # from the record, not reverse-engineered from its fields.  The
+        # destination is reduced to its file name because a committed
+        # artifact must never carry a user name, home directory, or private
+        # checkout location (see benchmarks/_provenance.py).
         "command": " ".join(["python", "benchmarks/strong_polish.py"]
-                            + sys.argv[1:]),
+                            + _redacted_argv(sys.argv[1:])),
         "case": args.input.name.removeprefix("input."),
+        # The deck the numbers belong to, hashed so a quoted result can be
+        # traced to an exact input rather than to a file name.
+        "input_sha256_prefix": file_sha256(args.input)[:16],
         "ns": args.ns,
         "mpol": args.mpol,
         "degree": args.degree,
@@ -470,7 +504,12 @@ def main() -> None:
         "setup_peak_rss_increase_mib": rss_after_setup - rss_initial,
         "total_seconds": time.perf_counter() - started,
         "total_peak_rss_increase_mib": _peak_rss_mib() - rss_initial,
+        # Both certificates carry the full normalization block: the
+        # pointwise eps_F saturates at 2 and says nothing on a low-beta or
+        # vacuum state, so a committed record must also carry the
+        # volume-averaged and dimensional measures that can move.
         "initial_certificate": {
+            "normalizations": force_error_record(initial_certificate),
             "normalized_l2": float(initial_certificate.normalized_l2),
             "radial_refinement": float(
                 initial_certificate.radial_refinement_difference
@@ -487,6 +526,7 @@ def main() -> None:
             },
         },
         "final_certificate": {
+            "normalizations": force_error_record(final_certificate),
             "normalized_l2": float(final_certificate.normalized_l2),
             "radial_refinement": float(
                 final_certificate.radial_refinement_difference

@@ -1,0 +1,92 @@
+{
+  "cases": {
+    "constant_toroidal_field": {
+      "absolute_l2": "0x1.373d6193716afp+16",
+      "absolute_linf": "0x1.56581da92711dp+16",
+      "absolute_p99": "0x1.55bf3d414e362p+16",
+      "angular_spectral_tail": "0x1.767127c056ef4p-14",
+      "arrays": {
+        "flux_surface_average": {
+          "l2": "0x1.7cb619a3b4ff9p+18",
+          "linf": "0x1.36d978b73f582p+16",
+          "size": 24
+        },
+        "flux_surface_normalized_l2": {
+          "l2": "0x1.3988e1409212ep+3",
+          "linf": "0x1.0000000000000p+1",
+          "size": 24
+        },
+        "radial_nodes": {
+          "l2": "0x1.bb67ae8584caap+1",
+          "linf": "0x1.fdd59e2b9c77cp-1",
+          "size": 24
+        }
+      },
+      "boundary_residual": "0x0.0p+0",
+      "bulk_l2": "0x1.3719e96eb4f84p+16",
+      "edge_l2": "0x1.377c0a3f51248p+16",
+      "force_floor": "0x1.19799812dea11p-40",
+      "gauge_residual": "0x0.0p+0",
+      "helical_l2": "0x1.b7e21724a2d3ap+15",
+      "helical_normalized_l2": "0x1.6a09e667f3b55p+0",
+      "minimum_signed_jacobian": "0x1.228f971b949d2p+3",
+      "near_axis_l2": "0x1.36db26a69f7d9p+16",
+      "nestedness_margin": "0x1.d0e5be9287621p-1",
+      "normalized_l2": "0x1.0000000000000p+1",
+      "normalized_linf": "0x1.0000000000000p+1",
+      "normalized_p99": "0x1.0000000000000p+1",
+      "radial_l2": "0x1.b86f88036e723p+15",
+      "radial_normalized_l2": "0x1.6a09e667f3c3ep+0",
+      "radial_refinement_difference": "0x0.0p+0"
+    },
+    "solovev_initial_lift": {
+      "absolute_l2": "0x1.869acb73513f4p+13",
+      "absolute_linf": "0x1.36d5978120fbbp+14",
+      "absolute_p99": "0x1.30f893d1c52a2p+14",
+      "angular_spectral_tail": "0x1.6fb095cb14ff1p-7",
+      "arrays": {
+        "flux_surface_average": {
+          "l2": "0x1.c1584f8943e03p+15",
+          "linf": "0x1.851fd29ae3fbap+13",
+          "size": 24
+        },
+        "flux_surface_normalized_l2": {
+          "l2": "0x1.3987a96a7a35dp+3",
+          "linf": "0x1.ffffcf82520ecp+0",
+          "size": 24
+        },
+        "radial_nodes": {
+          "l2": "0x1.bb67ae8584caap+1",
+          "linf": "0x1.fe4d8a0f078dbp-1",
+          "size": 24
+        }
+      },
+      "boundary_residual": "0x0.0p+0",
+      "bulk_l2": "0x1.7a9dd9a513bfdp+13",
+      "edge_l2": "0x1.9f5844f49d0a4p+13",
+      "force_floor": "0x1.19799812dea11p-40",
+      "gauge_residual": "0x0.0p+0",
+      "helical_l2": "0x1.de1ee178f9d0ep+12",
+      "helical_normalized_l2": "0x1.738c186afe60fp+0",
+      "minimum_signed_jacobian": "0x1.55c371e0282c4p+2",
+      "near_axis_l2": "0x1.63445762496cdp+13",
+      "nestedness_margin": "0x1.a961f7e01a45ap-1",
+      "normalized_l2": "0x1.fffe0425e3329p+0",
+      "normalized_linf": "0x1.fffffef852143p+0",
+      "normalized_p99": "0x1.fffff9be707a2p+0",
+      "radial_l2": "0x1.14cff93ee38a0p+13",
+      "radial_normalized_l2": "0x1.3b2ad4d0f6a1fp+0",
+      "radial_refinement_difference": "0x1.244e474a6ad7cp-44"
+    }
+  },
+  "measured": {
+    "jax": "0.9.2",
+    "jit_disabled": true,
+    "machine": "arm64",
+    "note": "Regenerated after #258 changed angular_spectral_tail and nestedness_margin, and after the guard moved from byte hashes to L2/Linf norms for arrays and an absolute floor of 1e-12 for scalars, because the same arithmetic differs by 1e-12 to 4e-12 between Apple silicon and the x86 runners.",
+    "vmex_commit": "928d4fc3",
+    "reverified_commit": "928d4fc3",
+    "regenerate_with": "python tools/make_strong_force_baseline.py"
+  },
+  "schema": "vmex.strong-force-certificate-baseline/1"
+}

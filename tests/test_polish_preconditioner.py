@@ -78,7 +78,10 @@ from vmex.core.polish_implicit import (
     collocation_polish_tangent,
     implicit_collocation_polished_state,
 )
-from vmex.core.strong_force import lift_high_order_state
+from vmex.core.strong_force import (
+    FORCE_ERROR_MEASURE_LABELS,
+    lift_high_order_state,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -1207,6 +1210,14 @@ def test_polish_driver_records_bounded_unpolished_return(
         normalized_l2 = jnp.asarray(2.0)
         radial_refinement_difference = jnp.asarray(0.0)
         minimum_signed_jacobian = jnp.asarray(0.5)
+        # the driver now reports the non-saturating window normalizations
+        # beside eps_F, so a stand-in certificate has to carry them
+        window_normalizations = SimpleNamespace(
+            volume_average_force=jnp.asarray(1.0),
+            relative_force_error=jnp.asarray(1.0),
+            magnetic_relative_force_error=jnp.asarray(1.0),
+            s_min=0.1, s_max=0.99,
+        )
 
     config = PolishConfig(
         max_continuation_stages=1,
@@ -1305,6 +1316,14 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
     certificate = SimpleNamespace(
         normalized_l2=0.0, radial_refinement_difference=0.0,
         minimum_signed_jacobian=0.5,
+        # the driver reports the non-saturating window normalizations
+        # beside eps_F on every route, so the stand-in carries them
+        window_normalizations=SimpleNamespace(
+            volume_average_force=jnp.asarray(1.0),
+            relative_force_error=jnp.asarray(1.0),
+            magnetic_relative_force_error=jnp.asarray(1.0),
+            s_min=0.1, s_max=0.99,
+        ),
     )
     setattr(certificate, field, value)
     native = SimpleNamespace(R_cos=jnp.zeros(1))
@@ -1340,7 +1359,10 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
     elif route == "continuation-final":
         config = dataclasses.replace(config, preconditioner="none")
         initial = SimpleNamespace(normalized_l2=1.0, radial_refinement_difference=0.0,
-                                  minimum_signed_jacobian=0.5)
+                                  minimum_signed_jacobian=0.5,
+            window_normalizations=SimpleNamespace(
+                volume_average_force=jnp.asarray(1.0), relative_force_error=jnp.asarray(1.0),
+                magnetic_relative_force_error=jnp.asarray(1.0), s_min=0.1, s_max=0.99))
         continuation = lambda *a, **k: SimpleNamespace(  # noqa: E731
             x=jnp.zeros(1), alpha=1.0, converged=True, steps=())
         monkeypatch.setattr(driver, "_solvax_continuation_api",
@@ -1402,6 +1424,14 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
         normalized_l2 = jnp.asarray(1.0e-9)
         radial_refinement_difference = jnp.asarray(0.0)
         minimum_signed_jacobian = jnp.asarray(0.5)
+        # the driver now reports the non-saturating window normalizations
+        # beside eps_F, so a stand-in certificate has to carry them
+        window_normalizations = SimpleNamespace(
+            volume_average_force=jnp.asarray(1.0),
+            relative_force_error=jnp.asarray(1.0),
+            magnetic_relative_force_error=jnp.asarray(1.0),
+            s_min=0.1, s_max=0.99,
+        )
 
     result = polish_strong_root(
         small_strong_root,
@@ -1457,6 +1487,13 @@ def test_legacy_polish_announces_refinement_and_certificate_phases():
     assert "refining the converged state" in text
     assert "evaluating the initial force certificate" in text
     assert "building the polish preconditioner and root runtime" in text
+    # eps_F alone is unreadable on a low-beta case: the console must name
+    # its ceiling and print the measures that can actually move.
+    assert "EPS-F is bounded by 2 by construction" in text
+    assert "<|F|>  [N m^-3]" in text
+    assert "<|F|>/<|grad B^2/2mu0|>" in text
+    assert "|F| L2 near axis [N m^-3]" in text
+    assert "(volume averages over s in [0.10, 0.99])" in text
 
 
 def test_collocation_polish_announces_each_phase(small_strong_root):
@@ -1489,6 +1526,54 @@ def test_collocation_polish_announces_each_phase(small_strong_root):
     assert "building the polish chart" in text
     assert "evaluating the initial force certificate" in text
     assert "collocation:" in text
+    # The closing block quotes the before/after eps_F pair, so it must also
+    # carry the bound and the non-saturating before/after rows.
+    assert "EPS-F IS BOUNDED BY 2 BY CONSTRUCTION" in text
+    assert "POLISH CERTIFICATE : EPS-F" in text
+    summary = text[text.index("POLISH CERTIFICATE : EPS-F"):]
+    assert summary.count(" -> ") >= len(FORCE_ERROR_MEASURE_LABELS)
+
+
+def test_normalization_fields_report_both_ends_of_the_window_averages():
+    """``PolishReport`` must carry a pair that can move, not only eps_F.
+
+    With one certificate the fields report the same state at both ends, as
+    the eps_F pair already does for an attempt that produced no correction;
+    with two they straddle the correction.
+    """
+    from vmex.core.polish_driver import _normalization_fields
+    from vmex.core.strong_force import certify_strong_force
+
+    inp = _small_solovev_input()
+    runtime = solver.prepare_runtime(inp, solver.resolution_from_input(inp, ns=5))
+    native = lift_high_order_state(
+        solver._initial_state(runtime.setup), runtime, degree=3
+    )
+    initial = certify_strong_force(native)
+    final = certify_strong_force(native, window=(0.3, 0.8))
+
+    single = _normalization_fields(initial)
+    assert single["normalization_window"] == (0.1, 0.99)
+    assert single["initial_volume_average_force"] == single[
+        "final_volume_average_force"
+    ]
+    assert single["initial_volume_average_force"] == pytest.approx(
+        float(initial.window_normalizations.volume_average_force)
+    )
+
+    pair = _normalization_fields(initial, final)
+    assert pair["final_volume_average_force"] == pytest.approx(
+        float(final.window_normalizations.volume_average_force)
+    )
+    assert pair["final_volume_average_force"] != pair[
+        "initial_volume_average_force"
+    ]
+    # The window reported is the one the *initial* certificate used, which
+    # is the window the pair is comparable in.
+    assert pair["normalization_window"] == (0.1, 0.99)
+    assert pair["initial_magnetic_relative_force_error"] == pytest.approx(
+        float(initial.window_normalizations.magnetic_relative_force_error)
+    )
 
 
 def test_collocation_polish_primal_and_derivatives(small_strong_root):

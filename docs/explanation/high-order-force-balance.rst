@@ -108,6 +108,69 @@ the boundary and gauge residuals.  The quadrature difference re-evaluates the
 same knots at Gauss order ``degree+1`` instead of ``degree+3``, so it measures
 integration-order consistency and not knot refinement.
 
+.. _eps-f-saturation:
+
+What the pointwise ratio cannot tell you
+----------------------------------------
+
+.. warning::
+
+   :math:`\varepsilon_F` is **bounded above by 2 by construction** and must
+   never be quoted on its own.  Because
+   :math:`\mathbf F = \mathbf J\times\mathbf B - \nabla p` obeys
+   :math:`|\mathbf F| \le |\mathbf J\times\mathbf B| + |\nabla p|`
+   pointwise, the ratio cannot exceed 2 however badly force balance is
+   violated.  It *reaches* 2 wherever the two terms stop cancelling, and in
+   vacuum, where :math:`\nabla p \equiv 0`, it degenerates to
+   :math:`2|\mathbf J\times\mathbf B| / (|\mathbf J\times\mathbf B| +
+   F_{\mathrm{floor}})`, which is 2 to machine precision wherever any
+   current remains.  A value near 2 reports a collapsed denominator, not a
+   200% force error, and two states pinned at the ceiling cannot be ranked
+   against each other at all.
+
+Every report therefore also carries volume-averaged normalizations, on the
+same quadrature nodes and the same :math:`|\sqrt g|` volume weights, that
+cannot saturate.  They are computed twice — over the whole domain
+(``global_normalizations``) and over a flux window, ``s`` in
+:math:`[0.1, 0.99]` by default (``window_normalizations``), which excludes
+the coordinate-singular axis and the boundary layer at the edge where the
+raw maxima live:
+
+.. math::
+
+   \frac{\langle|\mathbf F|\rangle}{\langle|\nabla p|\rangle},
+   \qquad
+   \frac{|\mathbf F|}{\langle|\nabla (B^2/2\mu_0)|\rangle},
+   \qquad
+   \langle|\mathbf F|\rangle .
+
+The first is the relative force error of Panici et al. 2023, Eqs. 32–34b
+(reference 48 in :doc:`/project/references`).  It is genuinely undefined in vacuum, so it is reported as
+``nan`` there rather than as a huge floored number.  The second is the
+vacuum-safe form: :math:`\nabla(B^2/2\mu_0)` does not vanish when the
+pressure is flat, so dividing by its volume average stays meaningful
+everywhere.  That is the normalization DESC's ``ForceBalance`` objective
+reports (``desc/objectives/_equilibrium.py``) and the form used by
+Thun et al. 2026, Eq. (42); ``magnetic_normalized_l2`` and
+``magnetic_normalized_linf`` keep the pointwise numerator and divide by the
+single global scale, as DESC does.  The third, the dimensional
+:math:`\langle|\mathbf F|\rangle` in N m\ :sup:`-3`, is what no
+normalization can hide.  ``near_axis_l2``, ``bulk_l2`` and ``edge_l2`` split
+the dimensional residual across :math:`\rho < 0.2`,
+:math:`0.2 \le \rho \le 0.8` and :math:`\rho > 0.8`, which is where a
+polish gain or a residual concentration actually shows up.
+
+Every place VMEX prints a certificate — the CLI polish block, the polish
+report, and the committed benchmark artifacts — carries these measures next
+to :math:`\varepsilon_F` together with an explicit statement of the bound.
+Quote one of them, never the :math:`\varepsilon_F` pair alone, when reporting
+a polish gain.
+
+The pointwise :math:`\varepsilon_F` volume L2 remains the *acceptance*
+criterion, unchanged and bit-identical to previous releases, because the
+shipped thresholds and the committed artifacts are calibrated against it.
+It is a threshold, not a figure of merit.
+
 Polishing chart and the frozen coordinate gauge
 -----------------------------------------------
 
@@ -230,6 +293,15 @@ It moved ``normalized_l2`` from ``1.28e-2`` to ``1.79e-3``, which is what the
 certificate asked for, but the Gauss--Newton iteration had not converged.
 Read ``nonlinear_iterations`` against ``max_nonlinear_iterations`` before
 treating a polish as converged in the solver sense.
+
+Read that pair with the section above in mind.  A re-measurement of the same
+case on the same lifted basis
+(``benchmarks/polish_force_error_2026-09-03.json``, 1.284e-2 to 1.803e-3)
+puts the volume-averaged relative force error at 2.090e-3 to 1.586e-3 -- a
+factor of 1.32, not 7 -- because the correction is concentrated near the
+axis, where the pointwise denominator is smallest and
+:math:`\varepsilon_F` is most sensitive to it.  The dimensional
+near-axis L2 falls by 14.5, the bulk by 1.11.
 
 When the certificate fails, ``fail_policy="raise"`` reports a typed
 :class:`~vmex.core.errors.StrongForceCertificationError` naming each failed

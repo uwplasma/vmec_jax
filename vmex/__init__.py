@@ -159,6 +159,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str | None]] = {
     "HighOrderFieldSamples": (".core.strong_force", "HighOrderFieldSamples"),
     "HighOrderSurfaceSamples": (
         ".core.strong_force", "HighOrderSurfaceSamples"),
+    "ForceErrorNormalizations": (
+        ".core.strong_force", "ForceErrorNormalizations"),
     "StrongForceReport": (".core.strong_force", "StrongForceReport"),
     "StrongForceSamples": (".core.strong_force", "StrongForceSamples"),
     "certify_strong_force": (".core.strong_force", "certify_strong_force"),
