@@ -8,14 +8,17 @@ benchmark artifacts, and the polish acceptance thresholds all quote.
 
 Two cheap, solve-free states cover it: the analytic constant-toroidal-field
 state and the lifted initial guess of ``input.solovev``.  Scalars are stored
-as ``float.hex()`` and arrays as the SHA-256 of their raw little-endian
-float64 bytes, because a decimal round trip would hide exactly the drift this
-file exists to catch.
+as ``float.hex()`` and arrays as the ``float.hex()`` of their L2 and Linf
+norms; a decimal round trip would hide exactly the drift this file exists to
+catch, while a byte hash of an array can only pass on the machine that
+wrote it.
 
 The values are measured on the **eager** (jit-disabled) lane, which is the
 lane the unit suite runs; XLA promises nothing about fusion across programs or
 platforms, and the same values shift by ~2e-13 between the eager and jitted
-lanes.  The guard therefore compares at ``rtol=1e-12``, far tighter than any
+lanes.  The guard therefore compares at ``rtol=1e-10`` with an absolute floor of
+``1e-12`` for round-off-level quantities (the same values shift by 1e-12
+to 4e-12 between Apple silicon and the x86 runners): far tighter than any
 behavioural change and loose enough to survive a different CPU.
 
 Run this **only** when the certificate's arithmetic is deliberately changed —
@@ -29,7 +32,6 @@ Record the commit you measured at in the ``measured`` block it writes.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import platform
 import sys
@@ -80,7 +82,11 @@ def _record(report) -> dict:
         )
         entry["arrays"][name] = {
             "size": int(values.size),
-            "sha256": hashlib.sha256(values.tobytes()).hexdigest(),
+            # norms, not a byte hash: the same arithmetic differs by ULPs
+            # between Apple silicon and the x86 runners, so a hash can only
+            # ever pass on the machine that wrote it
+            "l2": float(np.sqrt(np.sum(values * values))).hex(),
+            "linf": float(np.max(np.abs(values))) .hex(),
         }
     return entry
 
