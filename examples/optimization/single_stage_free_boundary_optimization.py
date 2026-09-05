@@ -1,6 +1,26 @@
 #!/usr/bin/env python
 """True free-boundary QA optimization with ESSOS coils as the only dofs.
 
+The coils start from a set that already produces a confining field, and that
+is a requirement rather than a convenience.  Seeding this lane from circular
+coils, the way ``single_stage_optimization.py`` does, does not work for a
+vacuum zero-current deck: circular coils carry no rotational transform, so the
+plasma they produce has none either, and the quasi-symmetry residual of a
+field with no transform is trivially small.  Measured on
+``input.minimal_seed_nfp2`` (CURTOR = 0, AM = 0) at ns=25, mpol=ntor=5, with
+random non-planar excursions added to 4 circular coils per half period: at
+zero excursion the solve converges to min|iota| = 5.6e-11 with a QA residual
+of 4.2e-10; the transform is still only 4.0e-3 at excursion 3e-2, and by
+excursion 1e-1 the free-boundary root is gone (status 2) with min|iota| at
+7.9e-3, against the 0.42 this example targets.  The optimizer would start in
+a flat, degenerate region it cannot cross.
+
+``single_stage_optimization.py`` can start there precisely because its plasma
+is a *fixed-boundary* solve coupled to the coils by a B.n penalty, so the
+boundary supplies the transform and the coils are pulled toward it.  Treat
+this lane as a refinement stage for coils that already confine, not as an
+initialization stage.
+
 Preview: this script needs ESSOS branch ``rj/vmex-optimization-interfaces``.
 """
 
@@ -37,11 +57,12 @@ SURFACES = np.linspace(0.1, 1.0, 6)
 NS, MPOL, NTOR, NITER, FTOL = 25, 5, 5, 2000, 1.0e-9
 MAXITER, METHOD, PARAMETER_BOUND = 20, "L-BFGS-B", 1.0
 ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
-# Coil length is a hinge above a reachable limit, not a target: with
-# LENGTH_TARGET = 3.5 against 5.25 m coils, 0.5*sum((L - 3.5)^2) = 23.598 was
-# 99.998% of the objective against QA at 3.4e-04, so the optimizer only ever
-# fought an unreachable length and the plasma terms were invisible.
-LENGTH_LIMIT, LENGTH_WEIGHT = 5.3, 1.0
+# 5.2 m against 5.25 m coils, not the former 3.5: at 3.5 the term was
+# 0.5*sum((L - 3.5)^2) = 23.598 against QA at 3.44e-04, i.e. 99.998% of the
+# objective, so the optimizer only ever fought an unreachable length.  A
+# target just inside the current length keeps a real shortening gradient
+# (0.02 at the start) without swamping the plasma terms.
+LENGTH_TARGET, LENGTH_WEIGHT = 5.2, 1.0
 CURVATURE_LIMIT, CURVATURE_WEIGHT = 7.0, 10.0
 COIL_DISTANCE_LIMIT, COIL_DISTANCE_WEIGHT = 0.08, 1.0e3
 OPTIONS = {"maxiter": MAXITER, "maxls": 10, "ftol": 1.0e-12, "gtol": 1.0e-8}
@@ -102,7 +123,7 @@ def objective(u):
         coils = coils_from_u(u)
         costs = jnp.asarray([
             0.5 * LENGTH_WEIGHT * jnp.sum(
-                jnp.maximum(coils.length - LENGTH_LIMIT, 0.0)**2),
+                (coils.length - LENGTH_TARGET)**2),
             0.5 * CURVATURE_WEIGHT * jnp.sum(
                 jnp.maximum(coils.curvature - CURVATURE_LIMIT, 0.0)**2),
             0.5 * COIL_DISTANCE_WEIGHT * loss_coil_separation(

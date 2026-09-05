@@ -34,7 +34,7 @@ SURFACES = np.linspace(0.1, 0.9, 8)
 NS, MPOL, NTOR, NITER, FTOL = 31, 5, 5, 2500, 1.0e-9
 MAXITER, METHOD, PARAMETER_BOUND = 20, "L-BFGS-B", 1.0
 ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
-LENGTH_LIMIT, LENGTH_WEIGHT = 5.3, 1.0
+LENGTH_TARGET, LENGTH_WEIGHT = 5.2, 1.0
 CURVATURE_LIMIT, CURVATURE_WEIGHT = 7.0, 10.0
 COIL_DISTANCE_LIMIT, COIL_DISTANCE_WEIGHT = 0.08, 1.0e3
 OPTIONS = {"maxiter": MAXITER, "maxls": 10, "ftol": 1.0e-12, "gtol": 1.0e-8}
@@ -111,7 +111,7 @@ def objective(u):
         coils = coils_from_u(u)
         costs = jnp.asarray([
             0.5 * LENGTH_WEIGHT * jnp.sum(
-                jnp.maximum(coils.length - LENGTH_LIMIT, 0.0)**2),
+                (coils.length - LENGTH_TARGET)**2),
             0.5 * CURVATURE_WEIGHT * jnp.sum(
                 jnp.maximum(coils.curvature - CURVATURE_LIMIT, 0.0)**2),
             0.5 * COIL_DISTANCE_WEIGHT * loss_coil_separation(
