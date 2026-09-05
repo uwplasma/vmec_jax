@@ -827,7 +827,12 @@ manifest. Complete the repaired matrix before drawing publication conclusions.
 5. Run one-change ablations at matched force/gradient accuracy. Save compact
    summaries and hashes; archive raw XPlane/Perfetto/HLO files outside git.
 
-Priority investigations: tridiagonal backend/launch count on GPU; repeated
+Priority investigations: the AUTO polish gate's price — one measured linear
+product times the iteration limits — scales with machine load (the bundled
+Solov'ev deck priced 501 s on the idle 36-core host and 45 068 s on a loaded
+laptop, where the default 3 600 s budget then declined it); price from a
+median of repeated products or a calibrated kernel model, and never decline a
+deck below a cheap floor. Then: tridiagonal backend/launch count on GPU; repeated
 Newton refinement and adjoint work in optimization; chart SVD and nested AD in
 polish; unused preconditioner setup; Boozer contraction/transpose memory;
 LASYM chunk policy; mature persistent-cache rescans; shared objective setup and
@@ -1555,8 +1560,13 @@ status and never blocks.
 | 13 | #266 coil target/seed/profile | stacked on #265 | Merge after 12 |
 | 14 | #261 polish memory/AUTO/heartbeat | rebased onto main including #269/#270 (29 commits, clean); #269's route-test stubs now accept the driver's `progress` keyword (68 route tests pass); memory and cost artifacts committed (see the previous row's numbers); one local driver-subset test was failing on the rebased branch at the time of writing and is being identified | Merge when its lanes are green; then 0.8.2 |
 | 15 | #197 contributor examples | behind main | Rebase (`codex/scalar-optimization-drivers-rebased` is clean); add the one-sentence trade note; merge as examples |
-| 16 | #280 force-error normalizations (was #275/#279) | rebased onto main after #258, baseline regenerated (two redefined fields), #269's stand-in certificates given the new field, guard widened to the measured 1e-12–4e-12 Mac-vs-x86 spread (rtol 1e-10). Then no workflow run appeared for any push, reopen or fresh PR: the cause was mundane — the branch conflicted with main once #269/#270 landed (`mergeable_state: dirty`), and GitHub creates no `pull_request` run when it cannot build the merge ref. Rebase onto current main, resolve, push | Merge when green; it retires every "26-fold" number |
+| 16 | #280 force-error normalizations (was #275/#279) | **merged 2026-09-05** (445ab9a7). It took three rounds after the rebase over #258: regenerate the pinned certificate baseline for the two redefined fields; give #269's stand-in certificates the new `window_normalizations`; and replace the guard's array byte-hashes with L2/Linf norms plus an absolute floor of 1e-12 for scalars, because the same arithmetic differs by 1e-12 to 4e-12 between Apple silicon and the x86 runners and a hash can only pass on the machine that wrote it. Every "26-fold" number is retired | — |
 | 17 | #272 Γ_c prompt-loss wording | **merged 2026-09-05** (eb2fdc1d) | — |
+
+CI shape after this round: the polish lane was split again — `test_run_options.py` is lane f on its own, and the four heaviest
+new polish tests in #261 (a live-progress heartbeat at 307 s, the ntor = 1 projection diagnostics at 235 s, two AUTO pricing
+paths at ~150 s each, all real polishes on an M4) carry `@pytest.mark.full` and run nightly; lane e had reached 25 minutes on
+main after #269's 705-s Solov'ev correction and timed out at 55 with them in the PR tier.
 
 After step 14, tag **v0.8.2** with #261, #254, #258, #259 and #262: a
 user-facing release (no OOM at W7-X scale, a priced AUTO, a heartbeat, a
