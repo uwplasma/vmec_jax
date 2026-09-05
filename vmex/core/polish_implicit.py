@@ -52,7 +52,11 @@ class PolishLinearConfig:
 
 
 class PolishLinearReport(NamedTuple):
-    """True residual certificate for one tangent or adjoint solve."""
+    """Finite unpreconditioned residual certificate for a tangent/adjoint solve.
+
+    ``converged`` requires finite operands, solution, norms and tolerance, with
+    ``residual_norm <= tolerance``; an internal Krylov success flag is insufficient.
+    """
 
     residual_norm: jax.Array
     tolerance: jax.Array
@@ -103,9 +107,21 @@ def _add_correction(
 
 
 def _linear_report(operator, rhs, solution, config: PolishLinearConfig):
-    residual_norm = jnp.linalg.norm(rhs - operator(solution.x))
-    tolerance = jnp.maximum(config.atol, config.rtol * jnp.linalg.norm(rhs))
-    converged = jnp.logical_or(solution.converged, residual_norm <= tolerance)
+    applied = operator(solution.x)
+    residual_norm = jnp.linalg.norm(rhs - applied)
+    rhs_norm = jnp.linalg.norm(rhs)
+    tolerance = jnp.maximum(config.atol, config.rtol * rhs_norm)
+    # Krylov flags can describe a preconditioned estimate. Only the finite,
+    # recomputed unpreconditioned residual certifies a derivative here.
+    finite = (
+        jnp.all(jnp.isfinite(solution.x))
+        & jnp.all(jnp.isfinite(rhs))
+        & jnp.all(jnp.isfinite(applied))
+        & jnp.isfinite(rhs_norm)
+        & jnp.isfinite(residual_norm)
+        & jnp.isfinite(tolerance)
+    )
+    converged = finite & (residual_norm <= tolerance)
     return PolishLinearReport(
         residual_norm=residual_norm,
         tolerance=tolerance,
@@ -128,9 +144,10 @@ def _checked_solution(
         if config.fail_policy == "raise":
             raise StrongForceLinearSolveError(
                 message=(
-                    f"strong-root {solve_kind} solve did not converge: residual "
-                    f"{float(report.residual_norm):.3e} > tolerance "
-                    f"{float(report.tolerance):.3e} after "
+                    f"strong-root {solve_kind} solve did not converge: finite "
+                    f"true-residual certificate failed (residual "
+                    f"{float(report.residual_norm):.3e}, tolerance "
+                    f"{float(report.tolerance):.3e}) after "
                     f"{int(report.iterations)} Krylov iterations"
                 ),
                 hint=(

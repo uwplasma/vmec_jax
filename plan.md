@@ -3,8 +3,47 @@
 Reviewed 2026-09-05 UTC. This is the authoritative forward plan, replacing the
 August plan and its appended September ledger. Completed work is linked, open
 work has an owner and an acceptance gate, and unsuccessful experiments remain
-evidence rather than proposed defaults. This revision plans implementation; it
-does not claim that the remaining physics or distributed solver is implemented.
+evidence rather than proposed defaults. Implementation status is recorded below;
+the remaining physics and distributed solver work is not yet implemented.
+
+## Execution logbook
+
+- **Completed checkpoint (2026-09-05 UTC):** user approved this plan. A's
+  true-residual acceptance gate (R1) is implemented and locally validated on this
+  branch; broader work packages remain open. Merge/CI status is tracked by PR.
+- **Resume location:** `/Users/rogeriojorge/local/vmex-acceptance`, branch
+  `fix/polish-true-residual`, based on plan commit `8ff1af78` (plan PR #267).
+  Original user worktrees are preserved. This branch stacks on the plan PR.
+- **Implemented:** finite unpreconditioned derivative
+  certificates in `polish_implicit.py`; no new production API or files. Internal
+  Krylov flags cannot override the true certificate. Norm overflow fails closed.
+- **Validation:** focused `-k polish_linear` tests: 42 passed on office
+  RTX A4000 (8.68 s; `JAX_PLATFORMS=cuda,cpu`, JAX 0.9.2, float64), including
+  actual JIT, both operator directions and exhausted GMRES. Local static
+  preflight passed (43 guards, 3 skips; Ruff, mypy, documentation prose).
+  CPU focused plus existing `collocation_polish_primal_and_derivatives` integration
+  test: 43 passed, 60 deselected in 374.17 s. This includes tangent/adjoint duality,
+  custom VJP, Boozer-objective pullback and stationarity Taylor checks. The long
+  integration uses the suite's default disabled JIT; focused tests explicitly
+  enable it. No full-suite or distributed-equilibrium claim is made.
+- **Baseline repair:** plan PR #267 now uses portable evidence path/host
+  placeholders (`b10b7c8e`, `8ff1af78`); its portability regression passes.
+  Raw evidence files and hashes remain unchanged.
+- **Commands:** from the resume worktree,
+  `VMEX_COMPILATION_CACHE=disabled python3 -m pytest -q tests/test_polish_preconditioner.py -k 'polish_linear or collocation_polish_primal_and_derivatives'`
+  and `python3 tools/preflight.py --static`. Focused CPU subset: 42 passed in
+  2.32 s. GPU source/test copies are isolated in
+  `office:/home/rjorge/local/vmex-acceptance`, detached baseline `09f18464`;
+  run the focused subset with `/home/rjorge/venvs/vmex-gpu/bin/python` and
+  `JAX_PLATFORMS=cuda,cpu`. The GPU integration test has not been run.
+- **Next:** review/merge the scoped R1 PR stacked on #267. Then implement the
+  next A checkpoint: unify the force certificate predicate at
+  `polish_legacy_solution`'s early return and `polish_collocation_least_squares`'s
+  completion, retaining finite-data, quadrature and geometry checks in both.
+  Follow with explicit stationarity eligibility in `PolishContext` and the
+  derivative entry points; today's integration fixture deliberately permits
+  physics acceptance after one GN step, so it is not proof of nonlinear-root
+  derivative accuracy. Do not mark all of A complete after R1.
 
 ## 1. Outcome and order of work
 
@@ -229,7 +268,7 @@ mode. Do not silently change a diagnostic command's exit behavior.
 **Owner:** VMEX reports, tests and `benchmarks/profile_workflows.py`; SOLVAX owns
 only generic solve-result semantics. **Exit:** every status means what it says.
 
-- [ ] Make a finite, recomputed **unpreconditioned** tangent/adjoint residual the
+- [x] Make a finite, recomputed **unpreconditioned** tangent/adjoint residual the
   authoritative gate. A solver's flag may be diagnostic; it cannot override a
   failed true residual. Test false-positive flags, NaN/Inf, zero RHS, iteration
   exhaustion, eager behavior and real `jax.jit` behavior. Check solution and
@@ -1148,8 +1187,9 @@ A performance result is not complete while accuracy is unknown. A physics
 feature is not complete while its public usage and failure mode are unclear.
 
 Update the affected checkbox/table and link the merged commit/artifact in place.
-Keep completed history in git/PRs; keep this file focused on decisions still
-needed. Do not create a new report file for each experiment when the existing
+Keep a compact execution logbook here with the active branch, checks, blockers
+and exact next action so an independent agent can resume. Link detailed history
+in git/PRs; keep this file focused on decisions still needed. Do not create a new report file for each experiment when the existing
 manifest can hold a record. Commits made for this work are authored by
 `rogeriojorge`; preserve existing contributors' authorship when incorporating
 their changes. Release publishing, external announcements and archival deposits

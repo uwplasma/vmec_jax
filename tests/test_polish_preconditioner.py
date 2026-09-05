@@ -70,6 +70,8 @@ from vmex.core.polish_implicit import (
     PolishLinearConfig,
     PolishLinearReport,
     _checked_solution,
+    _linear_report,
+    _solve_linear,
     _collocation_stationarity,
     _tree_norm as _implicit_tree_norm,
     collocation_polish_adjoint,
@@ -116,6 +118,101 @@ def test_polish_linear_failure_policy_is_explicit():
     )
     assert np.isnan(result).all()
     assert _implicit_tree_norm((jnp.asarray([3.0, 4.0]),)) == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize("compiled", [False, True])
+@pytest.mark.parametrize(
+    ("rhs", "value", "applied", "flag", "accepted"),
+    [
+        (1.0, 0.0, 0.0, True, False),
+        (1.0, 0.0, 0.0, False, False),
+        (1.0, 1.0, 1.0, False, True),
+        (1.0, np.nan, 1.0, True, False),
+        (1.0, np.inf, 1.0, True, False),
+        (np.nan, 1.0, 1.0, True, False),
+        (np.inf, 1.0, 1.0, True, False),
+        (1.0, 1.0, np.nan, True, False),
+        (1.0, 1.0, np.inf, True, False),
+        (1.0e200, 1.0e200, 1.0e200, True, False),
+        (1.0, 1.0e200, 1.0e200, True, False),
+        (0.0, 0.0, 0.0, False, True),
+        (0.0, 1.0e-12, 1.0e-12, False, True),
+        (0.0, 1.0e-9, 1.0e-9, True, False),
+    ],
+)
+def test_polish_linear_true_certificate(compiled, rhs, value, applied, flag, accepted):
+    def report_for(rhs, value, applied):
+        return _linear_report(
+            lambda _: applied,
+            rhs,
+            SimpleNamespace(x=value, converged=flag, iterations=jnp.asarray(30)),
+            PolishLinearConfig(),
+        )
+
+    with jax.disable_jit(False):
+        report = (jax.jit(report_for) if compiled else report_for)(
+            *[jnp.asarray([item, item]) for item in (rhs, value, applied)]
+        )
+    assert bool(report.converged) == accepted
+    assert int(report.iterations) == 30
+
+
+@pytest.mark.parametrize("policy", ["raise", "nan"])
+def test_polish_linear_compiled_failure_returns_nan_and_status(policy):
+    config = PolishLinearConfig(fail_policy=policy)
+
+    def checked(value):
+        report = _linear_report(
+            lambda x: x, jnp.ones(1),
+            SimpleNamespace(x=value, converged=True, iterations=jnp.asarray(1)),
+            config,
+        )
+        return _checked_solution(value, report, config, "tangent"), report
+
+    with jax.disable_jit(False):
+        value, report = jax.jit(checked)(jnp.zeros(1))
+    assert not bool(report.converged)
+    assert bool(jnp.all(jnp.isnan(value)))
+
+
+@pytest.mark.parametrize("transpose", [False, True])
+@pytest.mark.parametrize("compiled", [False, True])
+def test_polish_linear_krylov_true_residual(transpose, compiled):
+    matrix = jnp.asarray([[4.0, 1.0], [-2.0, 3.0]])
+    if transpose:
+        matrix = matrix.T
+    rhs = jnp.asarray([2.0, -1.0])
+
+    def solve(rhs):
+        return _solve_linear(
+            lambda x: matrix @ x, rhs, lambda x: x / 4.0,
+            PolishLinearConfig(), "adjoint" if transpose else "tangent",
+        )
+
+    with jax.disable_jit(False):
+        value, report = (jax.jit(solve) if compiled else solve)(rhs)
+    assert bool(report.converged)
+    np.testing.assert_allclose(value, np.linalg.solve(matrix, rhs), atol=1.0e-11)
+    assert float(jnp.linalg.norm(rhs - matrix @ value)) <= float(report.tolerance)
+
+
+@pytest.mark.parametrize("compiled", [False, True])
+def test_polish_linear_iteration_exhaustion(compiled):
+    matrix = jnp.asarray([[4.0, 1.0], [-2.0, 3.0]])
+    rhs = jnp.asarray([2.0, -1.0])
+
+    def solve(rhs):
+        return _solve_linear(
+            lambda x: matrix @ x, rhs, lambda x: x,
+            PolishLinearConfig(restart=1, max_restarts=1, fail_policy="nan"),
+            "tangent",
+        )
+
+    with jax.disable_jit(False):
+        value, report = (jax.jit(solve) if compiled else solve)(rhs)
+    assert not bool(report.converged)
+    assert float(report.residual_norm) > float(report.tolerance)
+    assert bool(jnp.all(jnp.isnan(value)))
 
 
 def test_collocation_certification_error_retains_both_failure_gates():
