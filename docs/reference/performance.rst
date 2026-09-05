@@ -175,7 +175,7 @@ allow in the worst case.  These are the measurements behind
 ``PolishConfig.auto_budget_seconds`` — the ceiling ``POLISH = AUTO`` prices
 a solve against before committing to it — and they are machine-specific by
 design, which is why AUTO measures at run time rather than consulting a
-size heuristic.
+size heuristic.  The record is ``benchmarks/polish_cost_office.json``, measured on the 36-core office host at driver defaults (80 nonlinear × 600 linear): the shaped tokamak prices at 1 126 s and the bundled Solov'ev at 501 s, both inside the default 3 600 s budget, while the finite-beta QA case prices at 87 848 s and is the deck AUTO turns away.
 
 Benchmark suite (CPU, ns = 201)
 -------------------------------
