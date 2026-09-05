@@ -1,12 +1,28 @@
 # VMEX research and implementation plan
 
-Reviewed 2026-09-05 UTC. This is the authoritative forward plan, replacing the
+Reviewed 2026-09-05 UTC, with a second literature review the same day (three
+read-only reports: polishing method versus DESC/GVEC/SIESTA/SPEC/Thun and the
+least-squares literature; differentiable optimization versus DESC, simsopt and
+the adjoint papers; validation evidence versus every equilibrium-code paper of
+2023–2026). This is the authoritative forward plan, replacing the
 August plan and its appended September ledger. Completed work is linked, open
 work has an owner and an acceptance gate, and unsuccessful experiments remain
 evidence rather than proposed defaults. Implementation status is recorded below;
 the remaining physics and distributed solver work is not yet implemented.
 
 ## Execution logbook
+
+- **Second review (2026-09-05, this revision):** reordered the critical path
+  (C0 decision gate with a kill criterion and a publishable fallback; E off
+  the path; F and the first paper decoupled from C), wrote the evidence bar
+  the papers actually set into J2, the derivative-verification table into
+  F0, the oracles and seeding chain into F2, the LSMR/preconditioner order
+  into C3, the PR merge order and required edits into section 6, the next
+  ten PRs into 7, and the environment runbook into 8. Corrected: the
+  tokamak polish record (80 GN / 47 308 CG / 463 s, not a 28 s run), the
+  Γ_c prompt-loss statement (#272), the status of 31.2-R7 (#264: already
+  correct), and the recovered `physics/force-error-normalizations` branch.
+  Office run in flight: the three-arm W7-X memory artifact for #261.
 
 - **Completed checkpoint (2026-09-05 UTC):** custom-VJP native-input provenance.
   Resume in `/Users/rogeriojorge/local/vmex-vjp-native`, branch
@@ -99,20 +115,38 @@ The program must deliver:
 6. A small, understandable API, student-to-research examples, organized
    documentation, reproducible evidence and one or more publishable results.
 
-The critical path is **A → B → C → D → E → F** below. Documentation and measured
-slimming proceed with every change. Mirror research (H) and downstream work (G)
-have their own prerequisites; they do not block a well-supported toroidal
-release or the first methods paper. Do not launch another multi-day W7-X polish
-before the frozen-operator and physical-functional gates in C pass.
+The critical path is **A → B → C0 → (C | F) → D** below; **E is not on it**.
+Documentation and measured slimming proceed with every change. Mirror research
+(H) and downstream work (G) have their own prerequisites; they do not block a
+well-supported toroidal release or the first methods paper. Do not launch
+another multi-day W7-X polish before the frozen-operator and physical-functional
+gates in C pass.
+
+Second review, 2026-09-05, after the A-stack #268–#270 landed on this branch:
+the order above is right for engineering and wrong for the calendar in two
+places, and both are fixed below. C is a research bet — a new residual, chart
+and linear solver for a 3-D problem that has so far certified nothing — and
+nothing here said what happens if it does not pay off. C0 gives it a bounded
+budget, a kill criterion and a fallback that keeps the first paper on the
+evidence already in hand: certified axisymmetric polish, the analytic
+Solov'ev oracle, six-deck VMEC2000 parity, the native-DESC comparison and the
+honest 3-D cost. E (one-problem multi-device sharding) sat on the critical
+path with no demonstrated payoff anywhere in the field — DESC's own multi-GPU
+work is experimental and workload dependent, and the review's probe is a
+building block — so E moves after F and out of every paper's dependencies
+except an explicitly distributed claim. F does not wait for C: every F row
+except "single-stage finite beta" runs on the VMEC branch finder plus the
+derivatives A just repaired.
 
 | Work package | Scope and owner | Depends on | Completion evidence |
 |---|---|---|---|
 | A | Acceptance, provenance and benchmark repairs — VMEX | current main | Failed roots/gradients cannot be labelled certified; honest stage records |
 | B | Physics oracle, conventions and native representation — VMEX | A | Analytic and manufactured tests; matched native cross-code metrics |
-| C | Recover a useful 3-D high-order solve — VMEX + SOLVAX | B | Frozen QA operator verified; certified finite-beta 3-D refinement |
+| C0 | Decision gate for 3-D polish — VMEX | B | One bounded experiment says whether 3-D polish fails on representation, conditioning or physics, or C is parked with a written fallback |
+| C | Recover a useful 3-D high-order solve — VMEX + SOLVAX | C0 pass | Frozen QA operator verified; certified finite-beta 3-D refinement |
 | D | Profile and reduce time/memory — respective kernel owners | A; C for polish claims | Cold/warm/gradient/time-to-accuracy results and trace-backed ablations |
-| E | CPU/GPU sharding and scaling — SOLVAX primitives, VMEX layouts | A, D; C for polish | Multi-device values/gradients, actual shard layouts and scaling curves |
-| F | Optimization and engineering examples — VMEX + ESSOS | A–D; E for scaling claims | Feasible before/after designs, independent validation, total cost |
+| F | Optimization and engineering examples — VMEX + ESSOS | A, B; C only for polished-state rows; D for cost tables | Feasible before/after designs, independent validation, total cost |
+| E | CPU/GPU sharding and scaling — SOLVAX primitives, VMEX layouts | A, D, F; C for polish | Multi-device values/gradients, shard layouts and scaling curves; a dependency only of an explicitly distributed claim |
 | G | Native consumers and confinement diagnostics — respective codes | B, F as appropriate | In-memory value/derivative parity and topology contracts |
 | H | Mirrors, anisotropy and hybrid optimization — VMEX + ESSOS | B, C foundations | Closure, interface, force, derivative and application certificates |
 | I | Documentation, API and slimming — VMEX | continuous | Shorter ownership paths, runnable tutorials and measured size/performance |
@@ -184,16 +218,16 @@ main revision and run the owning gates; do not concatenate stale plan edits.
 | PR | Keep or revise | Required next step |
 |---|---|---|
 | [#253](https://github.com/uwplasma/VMEX/pull/253) | Community, packaging, citation/provenance hygiene | Check JAX minimum against actual API use; preserve contributor credit; archive/DOI at submission; supersede its old “do not trim plan” prose |
-| [#254](https://github.com/uwplasma/VMEX/pull/254) | Bounded persistent-cache entry count | Test simultaneous writers, interrupted/hostile entries and mature-cache cost; do not claim CI lock contention was proved |
+| [#254](https://github.com/uwplasma/VMEX/pull/254) | Bounded persistent-cache entry count | Hostile-entry, held-lock and unparseable-bound branches now covered (diff-cover 95%). The CI-timeout mechanism stays "unproven": measured lock-held time is 0.55 s per cold solve; the measured per-write directory rescan is 0.028 ms per resident entry, 304 ms at 10 880 entries |
 | [#256](https://github.com/uwplasma/VMEX/pull/256) | Figure manifest, validation page and removal of unsupported numbers | Reconcile with #260/#264 and new measurements; keep failures in comparison tables; remove orphan media after reference checks |
 | [#257](https://github.com/uwplasma/VMEX/pull/257) | Public API coverage and useful docstrings | Resolve its discovered semantic defects through A/B/I; avoid presenting unused polish knobs as functional |
-| [#258](https://github.com/uwplasma/VMEX/pull/258) | Correct FFT tail mask and normalized Jacobian margin | Test signed FFT modes, Nyquist and union of tails; explain that sampled local orientation is not global injectivity |
+| [#258](https://github.com/uwplasma/VMEX/pull/258) | Correct FFT tail mask and normalized Jacobian margin | Signed modes, Nyquist, the corner union and scale invariance are tested; the `\|Jacobian\|` docutils substitution that failed `-W` is fixed. Still to say in the margin's docstring: a sampled local orientation is not global injectivity |
 | [#259](https://github.com/uwplasma/VMEX/pull/259) | Native LASYM flag propagation | Check all sine/cosine families, Boozer and virtual casing, eager/JIT and explicit tracer metadata |
 | [#260](https://github.com/uwplasma/VMEX/pull/260) | Native DESC measurement | Compare identical norms, grids, units and region; do not compare its native L1/pressure ratio with VMEX's bounded L2 ratio |
-| [#261](https://github.com/uwplasma/VMEX/pull/261) | Chunked/checkpointed memory reduction and cost/progress reporting | Separate memory fix from unproved solver improvements; no certified 3-D claim from the W7-X run; C replaces speculative long reruns |
+| [#261](https://github.com/uwplasma/VMEX/pull/261) | Chunked/checkpointed memory reduction and cost/progress reporting | Parity lane c2 fails because `tests/test_performance_docs.py` reads `benchmarks/polish_memory_w7x.json`, which the implementing agent never produced. The three-arm measurement is being regenerated on the office box from the branch head (2026-09-05); commit it, or drop the gate — no PR merges with a test that reads a file that does not exist. No certified 3-D claim from the W7-X run; C0 replaces speculative reruns. The heartbeat program carries host callbacks and is never written to the persistent cache; the lane documents that trade |
 | [#262](https://github.com/uwplasma/VMEX/pull/262) | Document NaN failure under JIT | Add the true-residual acceptance repair in A; document value plus status for transformed callers |
 | [#263](https://github.com/uwplasma/VMEX/pull/263) | Mirror model/metric audit | Scope axial-current rejection to the unsupported exterior; correct anisotropic oracle and exterior-BVP statements in H |
-| [#264](https://github.com/uwplasma/VMEX/pull/264) | Analytic Solov'ev oracle and LASYM audit | Extend native analytic refinement to B/C; do not halve `tcon` alone: the VMEC normalization changes must be considered together |
+| [#264](https://github.com/uwplasma/VMEX/pull/264) | Analytic Solov'ev oracle and LASYM audit | Closes 31.2-R7 as "VMEX was already correct": the 2024 STELLOPT `tcon` halving is half of a matched pair with that tree's conditional `dnorm`; upstream STELLOPT and PARVMEC retired both, VMEC++ agrees, and VMEX tracks the modern binary to its print precision (4.9e-3) while the isolated halving matches neither convention. Green; merge first. Extend the analytic refinement to B/C |
 | [#265](https://github.com/uwplasma/VMEX/pull/265) | Progress output and elimination of duplicate gradient calls | Do not promote `adjoint_fail="best_effort"` for certified optimization; a reported relative residual near 0.66 is a failed gradient |
 | [#266](https://github.com/uwplasma/VMEX/pull/266) | Profile ledger, physical scaling/bounds and coil-seed investigation | Stack after the safe parts of #265; pair tolerance comparisons with derivative/feasibility checks; C addresses the remaining polish bottleneck |
 | [#197](https://github.com/uwplasma/VMEX/pull/197) | Scalar-adjoint option after rebase | Preserve the measured startup/memory tradeoff and TRF's better objective per evaluation; consolidate duplicated example setup under I |
@@ -405,7 +439,10 @@ limit there rather than applying an impossible positive lower bound at rho=0.
 
 - [ ] Evaluate force on shifted/oversampled quadrature distinct from solve nodes,
   then increase evaluation quadrature until integration error is below the
-  claimed force improvement. Correct the signed-frequency angular tail mask.
+  claimed force improvement. The signed-frequency angular tail mask is
+  corrected in #258 (a pure m=1 field had reported half its power as
+  unresolved and a near-Nyquist field none), with a scale-free
+  `nestedness_margin` that had been the Jacobian minimum under a second name.
 - [ ] Re-solve/re-polish after radial h, spline degree and angular refinement.
   Record force, observables, current and gradient convergence separately. Rename
   the present quadrature-only difference; retain it as an integration check.
@@ -435,6 +472,95 @@ limit there rather than applying an impossible positive lower bound at rho=0.
 **Owners:** VMEX specifies the physical residual, chart, closure, local element
 blocks and acceptance. SOLVAX owns generic least-squares, factorizations,
 preconditioners, Krylov algorithms, globalization and implicit linear solves.
+
+### C0. Decision gate: representation, conditioning or physics?
+
+Three facts are measured and none is an answer. The shaped tokamak
+certifies (1.28e-2 → 1.79e-3 in the bounded metric), but the committed
+record (`benchmarks/strong_force_cases_m4.json`, VMEX `polish_report`) says
+how: 80 Gauss–Newton steps, **47 308 conjugate-gradient iterations**, 463 s,
+`least_squares_success: false`, accepted by the certificate. That is ~590
+CG iterations per step on a **148-unknown** normal system, in which exact
+arithmetic terminates CG in 148 — the finite-precision signature of a badly
+conditioned normal matrix, independent of any 3-D measurement. The
+finite-beta QA case polishes (independent absolute L2 3.43e4 → 2.04e4,
+−40%) but needed forty steps, and #266 measured 3 096 s and 16 GiB for
+three of them. W7-X costs 1.75 h per step with every step at the 150-
+iteration ceiling that run set (the driver default is 600) and moved the
+independent L2 by 1.1% in six steps (#261).
+
+Two things the literature settles before any experiment (method review of
+2026-09-05, section C3). First, CG on the Gauss–Newton normal equations
+converges at a rate set by κ(JᵀJ) = κ(J)², and reaching VMEX's
+`linear_rtol` 1e-3 needs k ≈ 3.8 κ(J) iterations; the linearized strong
+force is a second-order differential operator whose condition number
+scales as h⁻² in the radial spacing (the Hirshman–Betancourt argument), so
+κ(J) of 10³–10⁴ and k of 10⁴ per step is the natural expectation, and no
+equilibrium code in the field runs an unpreconditioned Krylov solver on
+it: VMEC's 2-D lane and SIESTA precondition with a block-tridiagonal
+Hessian, DESC factors a dense Jacobian by QR (7.6k unknowns at its W7-X
+resolution), GVEC and SPEC use descent or dense Newton. Second, there is a
+**resolution floor** that no polish at fixed MPOL = NTOR = 10 can cross:
+DESC's own W7-X equilibria sit at ⟨|F|⟩/⟨|∇p|⟩ = 4.8e-2 (ANSI) and 3.8e-2
+(fringe) at M = N = 10 and only reach 3e-3 at M = N = 14 (Panici 2023, the
+paper's notebook); Thun et al. 2026 place W7-X pruned to M_b = N_b = 10 at
+~1e-2 with exponential decrease in M = N. The W7-X residual at that
+resolution is angular truncation, and its saturated certificate (≈2,
+absolute_l2 ≈ 4.3e6 N/m³ against a |∇p| scale of ~2e5) says the lifted
+state is far from pointwise balance in the chart's own norm. So the
+1.1% is not primarily a solver failure; it is the chart being asked to
+remove content it cannot represent, with corrections that are purely
+horizontal because Z is frozen — something no mature code does (VMEC keeps
+R and Z free under spectral condensation; DESC keeps R, Z, λ free and lets
+Levenberg damping absorb the gauge).
+
+Spend **three bounded experiments**, in this order and each a few
+CPU-hours at most on the office box, to decide which of three things is
+wrong, because the remedies are disjoint:
+
+0. **Resolution-floor scan (minutes).** Run the W7-X deck through VMEC++
+   at ns 51/101/201 × MPOL = NTOR 10/12/16 and certify each with the
+   existing `benchmarks/strong_certificate.py`, reporting absolute_l2 and
+   ⟨|F|⟩/⟨|∇p|⟩. If the dimensional L2 falls by ≫ 1.1% with resolution,
+   fixed-chart polish at MPOL = NTOR = 10 is provably below its ceiling of
+   usefulness and the paper says so.
+0′. **LSMR swap on the tokamak (minutes).** Same 148-unknown case; compare
+   against 47 308 and record LSMR's condition estimate. Zero risk whatever
+   the outcome, and it is the first commit in C3 regardless.
+
+1. **Representation.** Freeze the QA linearization (C1) — or, cheaper and
+   more decisive, a reduced W7-X at MPOL = NTOR = 6, ns = 25 (1–2.5k
+   unknowns), dense J by batched `jacfwd` and one SVD: that gives κ(J)
+   (predicting the CG count and testing the diagnosis above), the spectrum
+   of the candidate block preconditioner, and from 5–10 exact steps the
+   certificate floor of the chart. If exact steps reduce the *independent*
+   force by much less than they reduce the collocation cost, the chart
+   (Z frozen, legacy-restriction image, R–λ only) is the problem: C2 first.
+   Repeat once with Z_sin unfrozen to isolate the gauge. The projection
+   "unresolved fraction" is not the discriminator (0.694 W7-X, 0.734 QA);
+   `sampled_rms` (0.442 vs 0.0018) is the quantity that differs.
+2. **Conditioning.** If the QR step is good but PCG needs more than ~150
+   iterations to reproduce it, the squared condition number of the normal
+   equations is the problem: LSMR on the rectangular Jacobian with the
+   existing variable scaling first, then a structured right preconditioner
+   (C3).
+3. **Physics.** If the QR step reduces the collocation cost but not the
+   independent force, the functional is wrong (R3: |sqrt g| without
+   quadrature weights, frozen denominator, separate radial/helical
+   magnitudes): C2's Cartesian volume-L2 rows first.
+
+**Budget and kill criterion.** C0 plus its first remedy get one calendar
+month of one person and the office box. If at the end no 3-D case below
+W7-X resolution certifies on the independent oracle with h/p convergence, C
+is **parked**: the J2 numerics paper ships with the certified axisymmetric
+result, the Solov'ev oracle, the native-DESC comparison (#260) and the W7-X
+cost as a stated limitation, and C reopens only with a new operator-based
+hypothesis. Parking is a normal outcome of this gate; the fallback is already
+publishable.
+
+The 0.8.2 release (J1) ships #261's memory fix, AUTO budget and progress
+heartbeat regardless of C0, because those are user-facing bug fixes, not 3-D
+accuracy claims.
 
 ### C1. Freeze one real linearization before designing the solver
 
@@ -494,6 +620,59 @@ the derivative of a public solve that recomputes weights for perturbed inputs.
 
 ### C3. Choose structured linear algebra from the actual operator
 
+**What the literature settles (2026-09-05).** Every Krylov-based
+equilibrium code preconditions the linearized operator with a
+block-tridiagonal-in-radius, diagonal-in-(m, n) Hessian approximation —
+VMEC's `scalfor` is the dominant ∂²_ρ, m² and (n·nfp)² terms of exactly
+that operator (Hirshman–Betancourt 1991; VMEC++ numerics Eqs. 5.234–5.262),
+VMEC2000's `precon2d` and SIESTA factor the full block-tridiagonal Hessian
+with BCYCLIC and hand it to GMRES — and the two codes that keep a strong
+collocation residual (DESC, the Thun PINN) never use Krylov at all. The
+practitioner's order, each step reusing the previous one's pieces:
+
+1. Log the inner residual history and time one residual, one JVP and one
+   VJP; the tokamak product costs ≈ 9.8 ms on 1 764 × 148 and linear scaling
+   predicts the W7-X 42 s, so the per-product cost is the honest size of a
+   non-FFT tensor operator, not a software pathology.
+2. Replace CG on JᵀJ + μI by **LSMR on [J; √μ I]** — same JVP + VJP per
+   iteration, monotone ‖Jᵀr‖, safe early termination, a condition estimate,
+   and the damped problem solved without forming the normal matrix (Fong &
+   Saunders 2011; Nocedal & Wright §10.2). SOLVAX 0.20.0 ships `pcg`,
+   GMRES/FGMRES and a `precond` hook but no LSQR/LSMR: that is the SOLVAX
+   addition. In exact arithmetic LSMR has the same iteration count as CG;
+   it buys stability and a meaningful stopping quantity, not a cure.
+3. Build the **same-basis right preconditioner**: block-diagonal in (m, n),
+   banded in the spline index (bandwidth 2·degree + 1), assembled from the
+   Hirshman–Betancourt terms in the B-spline basis using metric quantities a
+   residual evaluation already computes. Apply it as J M⁻¹, so the normal
+   operator becomes M⁻ᵀ JᵀJ M⁻¹ and the SPD companion for CG is (MᵀM)⁻¹ — a
+   solve with M followed by a solve with Mᵀ, never M⁻¹ alone. DESC's Jacobi
+   column scaling (`x_scale="auto"`) and VMEX's eight Rademacher probes are
+   the degenerate diagonal case; both remove coefficient disparity, neither
+   touches the spectral spread of a differential operator.
+4. The existing low-order block factorization goes in the same way or not
+   at all: with T the high←low transfer, right-precondition by T A_low⁻¹,
+   whose SPD companion is T A_low⁻¹ A_low⁻ᵀ Tᵀ (both `block_thomas_solve` and
+   its transpose exist in `implicit.py`). #261 measured "B Bᵀ from the
+   low-order inverse" as worse; if that applied a second-order inverse once
+   against a fourth-order operator it left a second-order, non-symmetric
+   product to which CG's theory does not apply, and the negative result
+   says nothing about the symmetric form. Record which form was tested.
+5. Only if 2–4 fail, DESC's route: a dense Jacobian by batched JVPs and a
+   QR (2.3 GB at DESC's 7.6k unknowns and 2× oversampling; more on VMEX's
+   denser tensor grid), a several-hour exact step instead of a 1.75 h inexact
+   one.
+
+Unfreeze Z_sin alongside: no mature code freezes a coordinate, and VMEX's
+Levenberg μI damping already does what DESC relies on to absorb the
+reparametrization null space, so this is cheap to try and C0's experiment 1
+says whether it matters. Add quadrature weights so the polish minimizes
+the certificate's norm (DESC's residual is quadrature-weighted so its sum
+of squares approximates a volume L² norm; VMEX's carries |√g| but no weights
+and a denominator frozen at the lifted state). The honest ceiling of all of
+this is the resolution floor of C0: sell the outcome as "affordable 3-D
+polish", never as "accurate W7-X at MPOL = NTOR = 10".
+
 For a local degree-d spline chart and local closure, each quadrature row touches
 at most d+1 radial basis functions. Then normal-matrix blocks couple radial
 indices separated by at most d. Verify this on **VMEX's** frozen matrix. Global
@@ -515,11 +694,11 @@ terms or revise the chart. Never discard off-band entries just to fit a solver.
   built from the **actual** damped normal operator, with radial overlap,
   angular/mode coupling and a spline coarse correction. Exact knot insertion
   provides transfer when nested spaces apply; verify the transpose/coarse metric.
-- [ ] Compare normal-equation PCG with a right-preconditioned rectangular method
-  such as LSMR when conditioning warrants it. Normal equations square the
-  singular-value condition number. Right preconditioning requires a consistent
-  transpose and damping transformation; arbitrary left row scaling changes the
-  least-squares objective.
+- [ ] LSMR on the rectangular damped system is the first inner-solver change
+  (item 2 above), and a same-basis block preconditioner the second (item 3).
+  Normal equations square the singular-value condition number. Right
+  preconditioning requires a consistent transpose and damping transformation;
+  arbitrary left row scaling changes the least-squares objective.
 - [ ] Wire the selected preconditioner into SOLVAX GN. Return inner convergence,
   true residual, breakdown and prediction-quality diagnostics. Use an inexact
   forcing policy appropriate to GN; tighten toward stationarity. Existing
@@ -665,6 +844,13 @@ exceptions for new capabilities and independent scientific tests.
 
 ## E. Make parallelism and sharding real on CPU and GPU
 
+**Status after the second review:** off the critical path. Independent-case
+ensembles (`parallel.solve_ensemble`) are shipped and are what design
+campaigns use; single-problem sharding is a research track whose payoff no
+published equilibrium code has demonstrated. Fund it after F has a feasible
+optimized design to scale, and never as a paper dependency unless the claim
+is distributed execution. The probes below stay as the starting point.
+
 **Owner split:** VMEX chooses physical work partitions and reduction weights;
 SOLVAX preserves shardings and implements generic communication/solves. The
 current `shard_batch`, global inner products, PCG, structured solvers and Schur
@@ -724,6 +910,45 @@ later extension, not implied by two devices on one host.
 **Owners:** VMEX equilibrium/objectives/constraints; SOLVAX generic algorithms;
 ESSOS coils, field evaluation, engineering objectives and orbit integration.
 
+### F0. The derivative-verification table (mandatory before any optimization claim)
+
+What the field publishes as evidence that a gradient is right, read on
+2026-09-05: Antonsen–Paul–Landreman 2019 and Paul et al. 2020 compare the
+adjoint against a direct finite difference of the actual objective on a real
+configuration and quote the residual (1.7e-3 fixed boundary, 4–6e-2 for
+coil gradients) with an error-versus-step plot that shows the round-off
+plateau; Nies et al. 2022 show the error falling linearly with the FD step
+and plateauing at the resolution floor; Jorge et al. 2023 (PPCF, not JPP)
+show a Taylor test with first- and second-order convergence; simsopt's
+test-suite criterion is a dyadic step ladder 2⁻¹⁰…2⁻¹⁹ with a contraction
+factor of 0.3–0.55 per halving. DESC Parts 2–3 publish no FD-versus-AD
+check at all — their evidence is perturbation accuracy against a re-solve
+and agreement with STELLOPT — which means a committed table of this kind is
+a differentiator, not a formality.
+
+VMEX today: tangent/adjoint duality 1.9e-10 and custom-VJP 8.75e-21 in
+`benchmarks/polish_implicit_m4.json`, single-step centered FD gates in the
+tests (solovev 1e-6, li383 2e-4 at a ~3e-5 FD floor, free boundary 1e-6,
+Γc within a factor 3, max-J 3e-4, single stage 5e-3…3e-2), the li383
+sign-flip anecdote in `docs/explanation/adjoint-gradients.md`, and **no
+Taylor test anywhere** although sections 7.2 and 23.2 of the old plan
+required one. Dot tests are internal consistency; nobody publishes them as
+the primary evidence.
+
+- [ ] One committed artifact, gated like `polish_implicit_m4.json`, with one
+  row per objective that will appear in a paper (QS ratio, smooth Γc, ε_eff
+  if `neo_jax` is differentiable, max-J/QI, bootstrap mismatch, D_Merc,
+  ballooning, coil terms; fixed and free boundary; polished state):
+  centered FD from an independent cold re-solve at tightened `ftol` at three
+  or more dyadic steps with the contraction factor, the duality identity, the
+  adjoint residual and tolerance, and one `ftol`/resolution sweep showing the
+  plateau. Include the li383 sign flip as a figure: FD through re-converged
+  roots is a genuine result.
+- [ ] The polished-state VJP stale-input incident (#270) and the solver-flag
+  acceptance incident (#268) are exactly the failure classes an end-to-end
+  multi-step Taylor test catches; the table exists so that class cannot
+  recur silently.
+
 ### F1. One small optimization interface
 
 - [ ] Keep scalar `value_and_grad` and vector `residual_and_jacobian` routes
@@ -750,6 +975,34 @@ ESSOS coils, field evaluation, engineering objectives and orbit integration.
 
 ### F2. Application sequence
 
+**Oracles that exist today and cost nothing to pin** (read 2026-09-05; every
+number that reaches a paper needs one): simsopt
+`QuasisymmetryRatioResidual.total()` on `wout_LandremanPaul2021_QA_lowres.nc`
+(public in simsopt's tests; VMEX ships the same input) for the QS residual —
+the current test pins only an internal A/B at 10%; DESC `GammaC` on li383
+at s=0.25, where VMEX's 2.8% agreement is a docstring note and not an
+assertion; NEO on W7-X through DESC's public `tests/inputs/neo_out.W7-X`
+(VMEX has no W7-X deck in the confinement tests; add one) beside the
+existing NEO/STELLOPT pins on the QA case at rtol 5e-5; simsopt
+`vacuum_well` on the same wout for the magnetic-well proxy; and the
+ConStellaration dataset (arXiv:2506.19583) as a large public oracle for a
+Dudt-2024-form QI residual if VMEX exposes one. Bootstrap is already at
+the community norm (SFINCS RMS 3.4%/0.93%, Redl curves ≤1%, DESC trapped
+fraction 5e-8). Max-J has no community oracle and needs its own Taylor
+test plus a physics check.
+
+**The flagship is a reproduction, not a new design.** Reviewers of DESC
+Part 3 got STELLOPT agreement to 1.3 mm; Giuliani et al. got the
+Landreman–Paul coils. VMEX's flagship optimization example is therefore
+Landreman–Paul precise QA from their axisymmetric circular start, their
+five-step |m|,|n| ≤ j ladder, A* = 6, ι̅* = 0.42, s_j = 0, 0.1, …, 1,
+reporting f_QS through the simsopt oracle, the symmetry-breaking B_mn
+(≤ 50 μT in the PRL) and NEO ε_eff, with the F0 table attached. The DESC
+Part 3 two-dimensional QH benchmark (data in `DESC/publications/dudt2022/`)
+is the second, cheaper comparison. The current `summary.csv` numbers
+(objective 4.35e-4, aspect 6.0004, ι 0.41999) are not comparable to
+anything published until the same metric is computed.
+
 | Application | Design and objectives | Required final validation |
 |---|---|---|
 | Student tokamak | A few boundary shape/profile variables; aspect ratio, elongation/triangularity, iota/current target | Analytic/Grad–Shafranov checks, current/force, FD gradient and feasible bounds |
@@ -762,7 +1015,27 @@ ESSOS coils, field evaluation, engineering objectives and orbit integration.
 | Periodic hybrid | Leg/return geometry, throat modulation, closure/iota and confinement, later coils | H's periodic model checks, explicit surface averages, ESSOS and applicable GKX/DKX validation |
 
 For coil cases, start from a seed with the required topology/iota and a measured
-normal-field error. ESSOS #58 is merged, but installed/released wheels must be
+normal-field error. The literature is unanimous with #266's measurement:
+no published true free-boundary single-stage run starts from circular coils.
+Every one starts from coils that already confine (CNT seeds in Baillod et al.
+2025; NCSX's M45 combined run only after a two-stage design existed; stage-2
+output in Jorge et al. 2023) or from a near-axis or guided stage that
+manufactures ι first (Giuliani et al. 2023, whose Boozer-surface problem is
+degenerate at ι = 0; Jorge, Giuliani & Loizu 2024, Sec. II C). The seeding
+chain is stage-1 fixed-boundary target → stage-2 coils (circular init is
+fine against a fixed target) → optional fixed-boundary single stage with a
+B·n penalty → free-boundary refinement with coil degrees of freedom. The
+circular-coil failure (root lost before ι reaches 8e-3) is publishable as a
+short negative result. On the adjoint: Henneberg et al. 2021, Sec. 6,
+state that small eigenvalues of the second variation make small equilibrium
+changes produce large coil changes near marginal roots — the published form
+of the stagnation #265 measured — and their Eq. 5.15 is the interior
+elimination that DESC's free boundary implements as an SVD pseudo-inverse
+of F_x. VMEX's `boundary_schur` is that structure; the coupled Krylov
+adjoint is novel and its stagnation at a marginal root is expected. Keep
+`boundary_schur` as the default *and* always report the certificate against
+the original coupled transpose; `adjoint_fail="best_effort"` never appears
+in a certified example. ESSOS #58 is merged, but installed/released wheels must be
 capability-tested; the review's installed environment failed that test. Publish
 a compatible version or pinned reproducible environment before calling the
 example installable. ESSOS's latest GitHub release in this snapshot is v0.16
@@ -1109,6 +1382,76 @@ AD tolerances to make a performance change pass.
 | Mirror/hybrid physics paper | What equilibria/designs become possible with a consistent anisotropic closure and coupled coils? Include exact limits, independent references, interface/closure certificates and scientifically meaningful optimized wells. | H and relevant F/G |
 | Optional JOSS software paper | Reusable software contribution, need, design, research use and community practice; no substitute for the numerical/physics papers. | Reproducible supported release and current journal eligibility |
 
+**The evidence bar, calibrated on 2026-09-05 against the papers that set it.**
+Every peer-reviewed equilibrium-code paper of the last three years (DESC
+Parts 1–3, Hudson et al. 2025 on the Shafranov shift across VMEC/DESC/SPEC,
+Thun et al. 2026, AGNI 2026, SPECTRE 2026) presents the same four things,
+and a reviewer will look for each by name: (i) a comparison to a named
+reference code on named public configurations with the metric defined in
+the text; (ii) an error-versus-resolution figure with the observed rate;
+(iii) timing on a named machine with the compile/warm-up policy stated;
+(iv) a code commit and a data archive. JOSS adds a checklist and, as the
+GVEC review shows, does not demand cross-code validation; CPC requires a
+deposited sample run. VMEC++'s paper presents none of (i)–(iii) — its
+validation is a CI repository of 9 configurations × β × (mpol, ntor) × ns
+= 219 variants at ≤1e-6 rel-abs with iteration counts within 20%, and its
+speed claim is qualitative. VMEX already exceeds that parity bar (six gated
+plus six fresh decks at ≤2.5e-10 relative, iteration counts within 25%; quote
+2.5e-10 and the 1e-9 gate, never 1.4e-10 alone) and already has derivative
+gates that no competitor quantifies. What it lacks, in reviewer order:
+
+1. **A code comparison that compares codes.** The force figure's DESC row
+   is VMEX's lift of a 129-surface export (7.1e-2) while DESC's own error on
+   the same equilibrium is 4.0e-6 (#260). Report each code's native force
+   error with one shared denominator — DESC via `compute("|F|")`, VMEC2000
+   and VMEC++ via the Panici Part 1 recipe on their own mesh with the
+   `s∈[0.1,0.99]` exclusion disclosed — and caption lifted rows as what they
+   are. Anchor externally on the one configuration both Part 1 and Thun 2026
+   used, W7-X standard at M=N=12, so VMEX sits on their published axes.
+2. **Headline claims main still makes that #256 withdraws** ("a fast desktop
+   CPU beats the A4000 on every production workflow", the cloc table, the
+   "same number of iterations" wording, the 1885→204/9.2× preconditioner row
+   that measures 1885→246/7.7×): merge #256 before any paper text is drafted.
+3. **A convergence-with-resolution study of VMEX solves.** Only spline-degree
+   tables and the branch-only oracle projection exist. Run the Part 1 scans
+   (D-shaped: M=16, NS 64…1024; W7-X 2% β: M=N 8…20, NS to 1024, FTOL
+   1e-4…1e-12) with the Part 1 metric so the radial slope is directly
+   comparable to their −1.02 for VMEC.
+4. **Timing methodology.** Five repetitions with min and median; a
+   serial-versus-serial row (XLA intra-op threads 1, `OMP_NUM_THREADS=1` for
+   VMEC++, VMEC2000 `-n 1`) beside a matched-core row; compiler and flags for
+   the Fortran; the compile census as its own column (already better than
+   most papers); ratios per deck, never "14 of 14 rows".
+5. **Parity breadth and provenance.** Run the public VMEC++ validation
+   matrix inputs through the existing harness and report per-variable-class
+   maxima; add one LASYM and one free-boundary deck to the fresh set; put the
+   STELLOPT source commit and compiler beside the binary hash in the
+   artifact; add STELLOPT's own `BENCHMARKS/VMEC_TEST` decks, whose upstream
+   gate is 5% at mid-radius.
+6. **One independent physics anchor** of the Hudson 2025 type: the
+   rotating-ellipse vacuum case (R0=10 m, a=1, b=0.25, N_P=5, 10 coils per
+   period, Ψ_edge=−1.4652431) is fully specified in that paper; reproducing
+   its Tables I–II (energy error ~1e-7, δb_n ~1e-5, axis position) places
+   VMEX beside VMEC, DESC and SPEC on a third party's numbers.
+7. **Packaging.** A data DOI for the benchmark artifacts at submission; all
+   figures in the manifest; a JOSS `paper.md` only if that venue is chosen;
+   CITATION.cff must not assert "certified force-balance polishing" while
+   the polish gain is under revision.
+8. The Solov'ev oracle (#264) is at the field's bar; pre-empt two questions:
+   say why O(h^(p−1)) is the expected order for a force built from second
+   radial derivatives of a degree-p spline, and add the 1983 experiment —
+   a VMEX *solve* of the Solov'ev deck scored against the closed form (axis
+   R₀, ι(s), |B|) at increasing ns and mpol — because the projection test
+   validates the oracle, not the solver.
+
+Two competitor facts to carry into the positioning: VMEC++ v0.6.0 (2026-07)
+shipped LASYM and v0.7.2 (2026-08) shipped adjoint boundary sensitivities
+with a SIMSOPT analytic gradient, so "differentiable VMEC" is no longer a
+unique claim — the implicit-derivative *certificates* and the polished-state
+derivatives are; and DESC's anisotropic pressure exists in code since
+v0.10.2 with only a zero-anisotropy regression test and no paper, so H's
+closure work has no published competitor yet.
+
 Predeclare the benchmark set and acceptance bands. Present accuracy/runtime/memory
 Pareto curves, success/failure coverage and confidence intervals. Compare native
 representations and exported compatibility separately. Show gradients versus
@@ -1186,7 +1529,103 @@ Neural post-correction and deflation papers are later comparison/hypothesis
 sources, not substitutes for C's residual/chart verification. Reassess literature
 at each paper freeze; publication dates and arXiv versions matter.
 
-## 6. Migration from the old plan and execution discipline
+## 6. Open pull requests: merge order and the edits each still needs
+
+Seventeen pull requests were open on 2026-09-05. Their file overlaps were
+computed against each PR's own base; the order below minimizes rebases of the
+large branches and lets the API-docs guard (#257) check everything that lands
+after it. "BLOCKED" on GitHub means unsigned commits and is cleared with an
+admin merge once the real lanes are green; `codecov/project` is an external
+status and never blocks.
+
+| Step | PR | State on 2026-09-05 | Action before merge |
+|---|---|---|---|
+| 1 | #267 → #268 → #269 → #270 | green; stacked | Merge in stack order; this revision is stacked on #270 |
+| 2 | #264 LASYM/Solov'ev | green | Merge |
+| 3 | #263 mirror audit | green | Merge; rebase only if plan.md conflicts with step 1 |
+| 4 | #262 failure policy | green | Merge |
+| 5 | #260 native DESC | green | Merge |
+| 6 | #258 certificate diagnostics | green after the docutils fix | Merge |
+| 7 | #259 symmetry flags | green except codecov | Merge |
+| 8 | #254 cache entry bound | coverage now 95% | Merge |
+| 9 | #253 hygiene | green | Rebase on 1–8 (README, performance.rst); merge |
+| 10 | #256 figures/validation page | green | Rebase on 9 (README, performance.rst, manifest); merge |
+| 11 | #257 API reference | green except codecov | Rebase on 1–10 (touches polish/implicit/virtual casing/omnigenity); its docstring guard then covers everything above; merge |
+| 12 | #265 optimizer output + free-boundary adjoint | green except codecov | Split: the trial printing and the duplicate-gradient fix merge; `adjoint_fail="best_effort"` stays opt-in and is never used by a certified example (F1) |
+| 13 | #266 coil target/seed/profile | stacked on #265 | Merge after 12 |
+| 14 | #261 polish memory/AUTO/heartbeat | parity c2 red: missing artifact | Commit `benchmarks/polish_memory_w7x.json` from the office rerun or delete the gate; then 0.8.2 |
+| 15 | #197 contributor examples | behind main | Rebase (`codex/scalar-optimization-drivers-rebased` is clean); add the one-sentence trade note; merge as examples |
+| 16 | `physics/force-error-normalizations` (no PR yet) | 4 commits pushed, unverified | Rebase on 6 and 14, run `tests/test_strong_force.py` and the polish suites, open the PR; it retires every "26-fold" number |
+| 17 | #272 Γ_c prompt-loss wording | docs only | Merge; it corrects a statement #250 introduced (below) |
+
+After step 14, tag **v0.8.2** with #261, #254, #258, #259 and #262: a
+user-facing release (no OOM at W7-X scale, a priced AUTO, a heartbeat, a
+cache that does not slow down with age, correct certificate diagnostics)
+that makes no new 3-D accuracy claim.
+
+## 7. The next ten pull requests, in order
+
+1. C0 experiment on the frozen QA linearization (C1 items 1–3 on one saved
+   state; augmented QR vs PCG vs LSMR; independent-force reduction per step),
+   committed as an artifact with the verdict written into C0.
+2. #261 artifact and 0.8.2 (step 14 above).
+3. F1: the derivative-verification table across every shipped objective
+   (tangent/adjoint identity, three-step directional finite differences,
+   stationarity Taylor check for polished states) as one committed artifact
+   and one docs table. This is what every reviewer will ask for first.
+4. A/B: `eps_F` disclosure plus the B2 norms in the certificate and in every
+   README/docs number. The 31.2-R1 branch `physics/force-error-normalizations`
+   holds four pushed commits (2 722 insertions, 18 files, no PR yet): the
+   non-saturating normalizations, the withdrawal of the 26-fold claim with
+   the like-for-like numbers (7.12× in the bounded metric, 1.32× whole
+   domain, 1.06× on s∈[0.1,0.99] in ⟨|F|⟩/⟨|∇p|⟩), the selection statement,
+   and a baseline-regeneration tool. Its agent died before verifying it:
+   rebase onto #258/#261 (all three touch `strong_force.py`), run the
+   strong-force and polish suites, then open the PR.
+5. B3: native DESC vs native VMEX at matched physical points on the shaped
+   tokamak and the finite-beta QA, extending #260 from "what DESC measures"
+   to "the same quantity for both codes".
+6. `scale_wout` profile-coefficient consistency (task chip open), the
+   GKX `epsilon` export alignment and the mirror figure writer (task chips).
+7. F2 row 2: reproduce Landreman–Paul precise QA from the published initial
+   condition with the QS residual reported in their definition, as the
+   flagship optimization example, with the F1 table attached.
+8. D3 tridiagonal backend on GPU (the 4 480 pivot-kernel launches and the
+   Thomas ablation): promote or reject with the D1 measurement contract.
+9. I1 first-path tutorial that runs end to end on a clean install, and the
+   issue #157 snippet.
+10. J2 paper 1 outline with the evidence map, written against the C0 outcome.
+
+## 8. Environment and resume facts (moved from the old ledger's 31.8)
+
+- The local checkout `/Users/rogeriojorge/local/vmex` is shared between
+  sessions; work in a worktree, push after every commit, author as
+  `Rogerio Jorge <rogerio.jorge@wisc.edu>`, never any assistant attribution
+  in commits or PR bodies. One heavy local run at a time; the machine has been
+  crashed by two.
+- There is no venv inside the repository. The measurement rig venvs live at
+  `/tmp/claude-501/localab/env-{0.3.0,0.8.0,dev}` (`env-dev` is editable on
+  the shared checkout and has essos); `/opt/local/bin/python3` also imports
+  vmex and essos. Run tests from a worktree with `PYTHONPATH=$PWD`.
+- `tests/conftest.py` sets `jax_disable_jit=True` for the whole suite (R15);
+  a test of traced behaviour must opt in with `jax.disable_jit(False)` or the
+  `_module_jit_enabled` fixture.
+- Office box: `ssh office`, 36 cores, 62 GB, 2×RTX A4000; checkout
+  `~/vmex-gpu`, interpreter `~/venvs/vmex-gpu/bin/python`, run with
+  `JAX_PLATFORMS=cpu JAX_ENABLE_X64=1` (or `cuda,cpu`); clear
+  `~/.cache/vmex ~/.cache/jax` before a run (stale cross-profile AOT entries
+  segfault); launch long jobs with `setsid nohup … < /dev/null &` and bound
+  them with `ulimit -v`. A `pkill -f` pattern that matches the ssh command
+  line kills the ssh session. Reference binaries: `~/bin/xvmec2000` (2024
+  STELLOPT snapshot) and the modern `~/local/STELLOPT_new/bin/xvmec2000`.
+- Persistent-cache facts: entries are `*-cache`/`*-atime` pairs in
+  `~/.cache/vmex/jax_cache/<fingerprint>`; every write rescans the directory
+  (#254); programs with host callbacks are never cached.
+- The merge bar: local verification plus every substantive CI lane green;
+  admin-merge over "BLOCKED" (unsigned) and over `codecov/project`; never
+  over a red physics or parity lane.
+
+## 9. Migration from the old plan and execution discipline
 
 No unfinished physics goal is dropped by shortening the old ledger. Use this map
 when closing existing PR references; do not append another contradictory ledger.
@@ -1203,7 +1642,7 @@ when closing existing PR references; do not append another contradictory ledger.
 | Validation, figures, optimized configurations and release phase 14 | B/F/H/J; selected-winner figure policy removed |
 | 31.2 R1–R7 and recommendations | A/B/C; #260 native-DESC and #264 exact-Solov'ev work remain open |
 | 31.2 R4/R8/R9 explanations | Corrected by #255; verify against subsequent algorithm changes |
-| 31.3 diagnostic formulas/citations | #250 landed; hard independent values/refinement and scientific optimization remain G |
+| 31.3 diagnostic formulas/citations | #250 landed with one error of its own: it said Velasco et al. 2021 eqs. (20)–(21) relate prompt losses "approximately linearly" to Γ_c. Eq. 20 is a rescaling, eq. 21 the \|γ_c*\| variant; their section 5.4 finds the loss fraction follows the eq. 21 variant, Γ_c itself does not predict it, and Γ_α is the validated predictor. #272 corrects the three sites. Hard independent values/refinement and scientific optimization remain G |
 | 31.4 mirror findings and spec sheet | H; corrected full parallel projection, closure eligibility and exterior-BVP interpretation |
 | 31.5 publication items | #245/#249 landed; #253/#256/#257 pending, I/J; DOI at submission |
 | 31.6 #197 decision | F/I preserve measured scalar/TRF tradeoff with fewer duplicated examples |
