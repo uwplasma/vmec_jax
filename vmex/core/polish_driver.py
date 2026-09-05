@@ -299,6 +299,9 @@ class PolishReport:
     initial_magnetic_relative_force_error: float | None = None
     final_magnetic_relative_force_error: float | None = None
     normalization_window: tuple[float, float] | None = None
+    seconds_per_linear_product: float | None = None
+    predicted_solve_seconds: float | None = None
+    auto_budget_seconds: float | None = None
 
 
 def _normalization_fields(
@@ -330,9 +333,6 @@ def _normalization_fields(
         ),
         "normalization_window": (float(window.s_min), float(window.s_max)),
     }
-    seconds_per_linear_product: float | None = None
-    predicted_solve_seconds: float | None = None
-    auto_budget_seconds: float | None = None
 
 
 class PolishContext(NamedTuple):
