@@ -296,7 +296,10 @@ implicit-function theorem to the least-squares stationarity equation
    g_c\,\dot c = -g_q\,\dot q,
 
 so a gradient costs one Krylov solve rather than a replay of Gauss--Newton
-steps.
+steps.  The custom VJP retains the native inputs of its own forward call for
+backward linearization.  Reusing a discretization does not reuse its original
+native parameter values; callers still need a stationary correction for the
+current inputs.
 
 Both Jacobian actions are JAX JVPs/VJPs of ``g``; SOLVAX GMRES solves the
 tangent and the transposed adjoint system, right-preconditioned by the squared

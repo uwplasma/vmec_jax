@@ -215,6 +215,36 @@ def test_polish_linear_iteration_exhaustion(compiled):
     assert bool(jnp.all(jnp.isnan(value)))
 
 
+@pytest.mark.parametrize("compiled", [False, True])
+def test_polish_vjp_uses_primal_native_input(monkeypatch, compiled):
+    """An analytic stationary root detects reuse of a stale native parameter."""
+    from vmex.core import polish_implicit as pi
+
+    @dataclasses.dataclass(frozen=True, eq=False)
+    class Runtime:
+        native: jax.Array
+
+    # g(c,q)=c-q^2=0, output=q+c, hence d(output)/dq=1+2q.
+    # Keep the actual adjoint/Krylov/custom-VJP chain; replace only the physics.
+    runtime = Runtime(jnp.asarray([1.0]))
+    context = PolishContext(runtime, SimpleNamespace(size=1), jnp.ones(1), jnp.ones(1))
+    monkeypatch.setattr(pi, "_collocation_stationarity", lambda c, q, runtime, chart: c - q*q)
+    monkeypatch.setattr(pi, "_collocation_corrected_state", lambda q, c, runtime, chart: q + c)
+
+    def objective(q):
+        stationary = context._replace(correction=jax.lax.stop_gradient(q*q))
+        return jnp.sum(implicit_collocation_polished_state(q, stationary))
+
+    with jax.disable_jit(False):
+        derivative = jax.grad(objective)
+        if compiled:
+            derivative = jax.jit(derivative)
+        # One compiled function must handle changed native data correctly.
+        for q in (1.0, 2.0, -0.5):
+            np.testing.assert_allclose(
+                derivative(jnp.asarray([q])), [1.0 + 2.0*q], atol=1.0e-11)
+
+
 def test_collocation_certification_error_retains_both_failure_gates():
     error = StrongForceCertificationError(
         "not certified",
