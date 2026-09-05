@@ -1010,6 +1010,7 @@ def polish_strong_root(
             "strong root failed the independent force certificate: "
             + "; ".join(failed_checks),
             hint="increase radial degree/resolution and retry once",
+            solver_converged=True,
             normalized_l2=float(certificate.normalized_l2),
             tolerance=config.certificate_tolerance,
             radial_refinement=float(certificate.radial_refinement_difference),

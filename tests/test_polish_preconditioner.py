@@ -1330,6 +1330,7 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
                 driver.polish_strong_root(
                     runtime, config=dataclasses.replace(config, fail_policy="raise"),
                     initial_certificate=initial)
+            assert failure.value.solver_converged
             np.testing.assert_equal(failure.value.radial_refinement,
                                     certificate.radial_refinement_difference)
         return
