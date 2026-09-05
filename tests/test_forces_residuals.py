@@ -298,3 +298,134 @@ def test_alias_lasym_gcon_matches_index_map_reference(shape):
         + gcon_asym[:, i2_reflected][:, :, k_reflected]
     )
     np.testing.assert_array_equal(got, expected)
+
+
+# ---------------------------------------------------------------------------
+# LASYM constraint scaling: the symmetric limit is continuous (plan 31.2-R7)
+# ---------------------------------------------------------------------------
+#
+# A 2024 STELLOPT snapshot paired two LASYM-only factors of one half: the
+# Fourier analysis weight ``dnorm = 1/(nzeta*ntheta3)`` in ``fixaray.f`` and
+# ``IF (lasym) tcon = p5*tcon`` in ``bcovar.f``.  Upstream retired BOTH
+# together (STELLOPT v6.5.0-42-g9177f58c and PARVMEC master: ``dnorm =
+# 1/(nzeta*(ntheta2-1))`` unconditionally, the ``tcon`` halving commented
+# out); VMEC++ 0.5.3 implements the same pair-free convention.  VMEX follows
+# the retired-pair convention, so both the analysis weight and ``tcon`` are
+# LASYM-independent and the two tests below pin that as an exact symmetric
+# limit.  Reinstating either factor alone breaks these by exactly 2x.  See
+# ``docs/reference/vmec2000-compatibility.rst`` ("LASYM constraint scaling").
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [(5, 0, 16, 1, 1), (6, 3, 18, 12, 3), (4, 2, 7, 5, 2)],
+    ids=["axisym", "nfp3", "odd-ntheta"],
+)
+def test_alias_lasym_reduces_exactly_to_the_symmetric_path(shape):
+    """``alias_constraint_force`` has no LASYM-only rescaling.
+
+    Feed both symmetry lanes the same stellarator-symmetric constraint
+    kernel — ``ztemp(-u, -v) = -ztemp(u, v)``, the parity ``alias.f``'s
+    ``gcs/gsc`` families assume.  Then ``work3 = -work1``, the ``p5`` of the
+    ``lasym`` branch is exactly the even/odd decomposition, ``gcc = gss = 0``,
+    and the reduced-interval ``gcon`` must agree to round-off with the
+    ``lasym=False`` result.  A LASYM-halved ``dnorm`` or ``tcon`` would show
+    up here as a clean factor of two.
+    """
+    from vmex.core.forces import alias_constraint_force
+    from vmex.core.fourier import Resolution, trig_tables
+
+    mpol, ntor, ntheta, nzeta, nfp = shape
+    common = dict(mpol=mpol, ntor=ntor, ntheta=ntheta, nzeta=nzeta, nfp=nfp, ns=7)
+    res_sym = Resolution(lasym=False, **common)
+    res_asym = Resolution(lasym=True, **common)
+    trig_sym = trig_tables(res_sym)
+    trig_asym = trig_tables(res_asym)
+    n_theta1, n_theta2 = res_asym.ntheta1, res_asym.ntheta2
+    assert (res_sym.ntheta1, res_sym.ntheta2) == (n_theta1, n_theta2)
+
+    rng = np.random.default_rng(ntheta)
+    raw = rng.standard_normal((7, n_theta1, nzeta))
+    i_reflected = np.where(np.arange(n_theta1) == 0, 0, n_theta1 - np.arange(n_theta1))
+    k_reflected = (nzeta - np.arange(nzeta)) % nzeta
+    ztemp = 0.5 * (raw - raw[:, i_reflected, :][:, :, k_reflected])
+    tcon = jnp.asarray(rng.standard_normal((7,)) ** 2 + 0.1)
+
+    kw = dict(mpol=mpol, ntor=ntor, signgs=-1, tcon=tcon)
+    gcon_asym = np.asarray(alias_constraint_force(
+        jnp.asarray(ztemp), trig=trig_asym, lasym=True, **kw))
+    gcon_sym = np.asarray(alias_constraint_force(
+        jnp.asarray(ztemp[:, : trig_sym.ntheta3]), trig=trig_sym, lasym=False, **kw))
+
+    scale = max(float(np.abs(gcon_sym).max()), 1e-300)
+    assert scale > 0.0
+    np.testing.assert_allclose(
+        gcon_asym[:, :n_theta2], gcon_sym[:, :n_theta2],
+        rtol=0.0, atol=1e-12 * scale,
+        err_msg="lasym alias gcon must equal the symmetric gcon in the symmetric limit",
+    )
+    # ... and the extended half-interval carries the odd reflection exactly.
+    np.testing.assert_allclose(
+        gcon_asym[:, n_theta2:],
+        -gcon_asym[:, i_reflected, :][:, :, k_reflected][:, n_theta2:],
+        rtol=0.0, atol=1e-12 * scale,
+    )
+
+
+@pytest.mark.parametrize("name", ["DSHAPE", "circular_tokamak", "solovev"])
+def test_constraint_scaling_is_lasym_independent(name):
+    """``bcovar.f`` ``tcon`` carries no LASYM factor.
+
+    Build a stellarator-symmetric deck twice — as shipped, and with
+    ``LASYM = T`` and identically zero asymmetric boundary coefficients.  The
+    two runs describe the same equilibrium on different theta grids, so every
+    surface average feeding ``tcon`` (``ard/azd`` via ``ptau``, ``arnorm``,
+    ``aznorm``) agrees, and ``tcon`` itself must agree to round-off.  The
+    retired ``IF (lasym) tcon = p5*tcon`` would halve the LASYM column.
+    """
+    import dataclasses
+
+    from vmex.core.fields import constraint_scaling, magnetic_fields, metric_elements
+    from vmex.core.geometry import (
+        apply_lambda_axis_closure, half_mesh_jacobian, real_space_geometry,
+    )
+    from vmex.core.solver import _geometry
+
+    def tcon_of(inp):
+        resolution = resolution_from_input(inp)
+        setup = run_setup(inp, resolution, infer_axis_if_missing=True)
+        rt = prepare_runtime(inp, resolution, setup=setup)
+        setup = rt.setup
+        state = _initial_state(setup)
+        s = setup.s_full
+        (R_cos, R_sin, Z_cos, Z_sin), _ = _geometry(state, rt)
+        geom = real_space_geometry(
+            R_cos=R_cos, R_sin=R_sin, Z_cos=Z_cos, Z_sin=Z_sin,
+            lambda_cos=state.L_cos,
+            lambda_sin=apply_lambda_axis_closure(
+                state.L_sin, modes=rt.modes, ntor=rt.resolution.ntor),
+            modes=rt.modes, trig=rt.trig, s=s,
+        )
+        jac = half_mesh_jacobian(geom, s=s)
+        mets = metric_elements(geom, s=s)
+        fields = magnetic_fields(
+            geometry=geom, jacobian=jac, metrics=mets, trig=rt.trig, s=s,
+            phips=setup.phips, phipf=setup.phipf, chips=setup.chips,
+            signgs=setup.signgs, gamma=rt.gamma, mass=setup.mass,
+            ncurr=setup.ncurr, enclosed_current=setup.icurv,
+        )
+        tcon = constraint_scaling(
+            tcon0=rt.tcon0, geometry=geom, jacobian=jac,
+            total_pressure=fields.total_pressure, trig=rt.trig, s=s,
+        )
+        return np.asarray(tcon), rt.trig.ntheta3
+
+    inp = VmecInput.from_file(DATA_DIR / f"input.{name}")
+    assert not bool(inp.lasym)
+    tcon_sym, ntheta3_sym = tcon_of(inp)
+    tcon_asym, ntheta3_asym = tcon_of(dataclasses.replace(inp, lasym=True))
+
+    # The lanes really are different grids (otherwise the test is vacuous).
+    assert ntheta3_asym > ntheta3_sym
+    assert np.all(tcon_sym[1:-1] > 0.0)
+    np.testing.assert_allclose(tcon_asym, tcon_sym, rtol=1e-12, atol=0.0)

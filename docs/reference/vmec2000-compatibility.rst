@@ -580,6 +580,73 @@ LASYM ``currvmns``
    VMEC++ 0.7.1.  This changes only the derived asymmetric current-density
    WOUT channel, not the equilibrium force iteration.
 
+LASYM constraint scaling (``tcon``)
+   Older VMEC2000 trees carry two LASYM-only factors of one half, and they
+   are a matched pair, not two independent corrections:
+
+   1. ``fixaray.f`` sets the Fourier *analysis* weight to
+      ``dnorm = 1/(nzeta*ntheta3)`` when ``LASYM`` is on (half the symmetric
+      ``1/(nzeta*(ntheta2-1))``), which halves every reduced-interval force
+      projection; and
+   2. ``bcovar.f`` applies ``IF (lasym) tcon = p5*tcon`` to the whole
+      spectral-condensation array.
+
+   Upstream retired **both** together.  STELLOPT ``v6.5.0-42-g9177f58c`` and
+   PARVMEC ``master`` set ``dnorm = 1/(nzeta*(ntheta2-1))`` unconditionally —
+   correct, because ``symforce.f`` gives the kernel a definite parity first,
+   so the endpoint-half-weighted reduced integral already equals the
+   full-grid average — and comment out the ``tcon`` halving in both
+   ``bcovar`` routines.  VMEC++ 0.5.3 independently implements the same
+   convention (``intNorm = 1/(nZeta*(nThetaReduced-1))`` with no ``LASYM``
+   branch, and only the ``tcon(ns) = 0.5*tcon(ns-1)`` edge rule).
+
+   VMEX follows the retired-pair convention.  ``constraint_scaling`` takes no
+   ``lasym`` argument and ``trig_tables`` builds one ``cosmui``/``sinmui`` for
+   both symmetry modes; only the surface-average weight ``dnorm3``
+   (``wint``/``cosmui3``) stays LASYM-dependent.  Reinstating the ``tcon``
+   halving *alone* — the reading a 2024 source snapshot invites — reproduces
+   neither convention, because it changes the constraint-to-MHD force ratio
+   by two in a code that no longer halves the analysis weight.
+
+   Measured on ``input.up_down_asymmetric_tokamak`` (``NS = 17``, 2000
+   iterations, ``NSTEP = 1``), comparing the per-iteration
+   ``(FSQR, FSQZ, FSQL)`` trajectory against both binaries, at the three
+   printed digits of the VMEC screen output:
+
+   .. list-table::
+      :header-rows: 1
+      :widths: 34 33 33
+
+      * - VMEX variant
+        - vs. upstream ``xvmec2000``
+        - vs. 2024-snapshot ``xvmec2000``
+      * - as shipped (no halving)
+        - **4.9e-3** (print precision)
+        - 5.5e+1
+      * - ``tcon`` halved only
+        - 2.8e+1
+        - 5.7e+1
+      * - ``dnorm`` halved only
+        - 5.9e+1
+        - 1.8e+0
+      * - both halved
+        - 7.5e+1
+        - **5.0e-3** (print precision)
+
+   (max relative deviation over all 2000 iterations).  The pair also shifts
+   the converged state: between the two binaries the asymmetric harmonics of
+   ``input.up_down_asymmetric_tokamak`` move by 1.8e-2 (``rmns``) and 1.4e-2
+   (``zmnc``) relative to their maxima and ``wb`` by 1.5e-7, and VMEX
+   reproduces each side of that shift to the same figures.  The shipped
+   golden fixtures come from the upstream binary, so the end-to-end
+   ``tests/test_parity_breadth.py`` case already fails if the halving is
+   reintroduced (it would move ``rmns`` by 2.1e-4 absolute against a 2e-5
+   tolerance).  ``tests/test_forces_residuals.py`` pins the convention
+   directly, as an exact symmetric limit: for a stellarator-symmetric
+   configuration the ``LASYM`` lane must reproduce the symmetric lane's
+   ``tcon`` and ``gcon`` to round-off, and either half-factor breaks that by
+   exactly two.
+
 ``LFULL3D1OUT``
    Selects VMEC2000's forced-output path after iteration-budget exhaustion.
    The resulting WOUT retains ``ier_flag=2`` and does not declare the state
