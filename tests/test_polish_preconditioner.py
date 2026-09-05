@@ -1175,6 +1175,8 @@ def test_polish_driver_records_bounded_unpolished_return(
 ):
     class InitialCertificate:
         normalized_l2 = jnp.asarray(2.0)
+        radial_refinement_difference = jnp.asarray(0.0)
+        minimum_signed_jacobian = jnp.asarray(0.5)
 
     config = PolishConfig(
         max_continuation_stages=1,
@@ -1249,9 +1251,125 @@ def test_polish_driver_records_bounded_unpolished_return(
     assert result.native_equilibrium is small_strong_root.native
 
 
+@pytest.mark.parametrize("route", ["legacy", "continuation", "continuation-final", "collocation"])
+@pytest.mark.parametrize(
+    ("field", "value", "accepted"),
+    [("normalized_l2", 0.01, True),
+     ("normalized_l2", 0.011, False),
+     ("normalized_l2", -1.0, False),
+     ("radial_refinement_difference", 0.001, True),
+     ("radial_refinement_difference", 0.002, False),
+     ("radial_refinement_difference", -1.0, False),
+     ("minimum_signed_jacobian", 0.0, False),
+     ("minimum_signed_jacobian", -1.0, False)]
+    + [(field, value, False)
+       for field in ("normalized_l2", "radial_refinement_difference",
+                     "minimum_signed_jacobian")
+       for value in (np.nan, np.inf, -np.inf)],
+)
+def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
+    """Exercise the driver decisions while substituting costly physics kernels."""
+    from vmex.core import polish_driver as driver
+    from vmex.core import strong_force
+
+    certificate = SimpleNamespace(
+        normalized_l2=0.0, radial_refinement_difference=0.0,
+        minimum_signed_jacobian=0.5,
+    )
+    setattr(certificate, field, value)
+    native = SimpleNamespace(R_cos=jnp.zeros(1))
+    runtime = SimpleNamespace(
+        native=native, layout=SimpleNamespace(size=1), operator_balance=1.0,
+        low_preconditioner=SimpleNamespace(factor_build_seconds=0.0),
+    )
+    config = PolishConfig(fail_policy="return_unpolished")
+    failed = driver._failed_certificate_checks(certificate, config)
+    assert bool(failed) != accepted
+    if not np.isfinite(value):
+        assert "nonfinite" in failed[0]
+
+    class NeedsCorrection(Exception):
+        pass
+
+    def correction_required(*args, **kwargs):
+        raise NeedsCorrection
+
+    if route == "continuation":
+        monkeypatch.setattr(driver, "_solvax_continuation_api", correction_required)
+        run = lambda: driver.polish_strong_root(  # noqa: E731
+            runtime, config=config, initial_certificate=certificate)
+    elif route == "legacy":
+        for name in ("make_config", "params_from_input", "runtime_from_params",
+                     "_dof_mask", "_refined_state"):
+            monkeypatch.setattr(implicit, name, lambda *a, **k: native)
+        monkeypatch.setattr(strong_force, "lift_high_order_state", lambda *a, **k: native)
+        monkeypatch.setattr(strong_force, "certify_strong_force", lambda *a: certificate)
+        monkeypatch.setattr(driver, "build_low_order_preconditioner", correction_required)
+        run = lambda: driver.polish_legacy_solution(  # noqa: E731
+            _small_solovev_input(), SimpleNamespace(ns=5), native, config=config)
+    elif route == "continuation-final":
+        config = dataclasses.replace(config, preconditioner="none")
+        initial = SimpleNamespace(normalized_l2=1.0, radial_refinement_difference=0.0,
+                                  minimum_signed_jacobian=0.5)
+        continuation = lambda *a, **k: SimpleNamespace(  # noqa: E731
+            x=jnp.zeros(1), alpha=1.0, converged=True, steps=())
+        monkeypatch.setattr(driver, "_solvax_continuation_api",
+                            lambda: (None, None, continuation, None, None))
+        monkeypatch.setattr(driver, "_ptc_config", lambda *a, **k: None)
+        monkeypatch.setattr(driver, "_continuation_config", lambda *a: None)
+        monkeypatch.setattr(driver, "_minimum_signed_jacobian", lambda *a: 0.5)
+        monkeypatch.setattr(driver, "_solve_residual", lambda *a: jnp.zeros(1))
+        monkeypatch.setattr(driver, "_normalized_low_residual_norm", lambda *a: 0.0)
+        monkeypatch.setattr(driver, "_corrected_state", lambda *a: native)
+        monkeypatch.setattr(driver, "certify_strong_force", lambda *a: certificate)
+        result = driver.polish_strong_root(runtime, config=config, initial_certificate=initial)
+        assert result.polish_report.converged == accepted
+        assert result.polish_report.radial_refinement_tolerance == 0.001
+        if not accepted:
+            with pytest.raises(StrongForceCertificationError) as failure:
+                driver.polish_strong_root(
+                    runtime, config=dataclasses.replace(config, fail_policy="raise"),
+                    initial_certificate=initial)
+            np.testing.assert_equal(failure.value.radial_refinement,
+                                    certificate.radial_refinement_difference)
+        return
+    else:
+        chart = SimpleNamespace(size=1, lift=lambda x: x)
+        monkeypatch.setattr(driver, "strong_collocation_residual", lambda *a: jnp.ones(1))
+        monkeypatch.setattr(driver, "_collocation_variable_scale", lambda *a: np.ones(1))
+        monkeypatch.setattr(driver, "_corrected_state", lambda *a: native)
+        monkeypatch.setattr(driver, "certify_strong_force", lambda *a: certificate)
+        monkeypatch.setattr(driver, "_gauss_newton_polish_lane", lambda *a: SimpleNamespace(
+            x=jnp.zeros(1), accepted_steps=0, rejected_steps=0, steps=1,
+            linear_iterations=1, cost=0.0, gradient_norm=1.0,
+            history=SimpleNamespace(gradient_norm=jnp.ones(1)),
+            converged=False, damping=0.001,
+        ))
+        monkeypatch.setattr(jax, "block_until_ready", lambda x: x)
+        result = driver.polish_collocation_least_squares(
+            runtime, chart=chart, config=config, initial_certificate=certificate)
+        assert result.polish_report.converged == accepted
+        assert (result.context is not None) == accepted
+        if not accepted:
+            with pytest.raises(StrongForceCertificationError, match=failed[0].split()[0]):
+                driver.polish_collocation_least_squares(
+                    runtime, chart=chart, config=dataclasses.replace(config, fail_policy="raise"),
+                    initial_certificate=certificate)
+        return
+    if not accepted:
+        with pytest.raises(NeedsCorrection):
+            run()
+    else:
+        result = run()
+        assert result.polish_report.converged
+        assert result.polish_report.termination_reason == "already-certified"
+        assert result.polish_report.radial_refinement_tolerance == 0.001
+
+
 def test_polish_driver_skips_an_already_certified_state(small_strong_root):
     class InitialCertificate:
         normalized_l2 = jnp.asarray(1.0e-9)
+        radial_refinement_difference = jnp.asarray(0.0)
         minimum_signed_jacobian = jnp.asarray(0.5)
 
     result = polish_strong_root(
@@ -1557,7 +1675,18 @@ def test_public_solver_resolves_polish_keywords_only():
         solver._resolve_force_balance_polish(inp, False, True)
 
 
-def test_public_solver_auto_attaches_an_already_certified_native_state():
+def test_public_solver_auto_corrects_a_lift_that_fails_quadrature(monkeypatch):
+    from vmex.core import strong_force
+
+    initial_certificates = []
+    certify = strong_force.certify_strong_force
+
+    def record_certificate(*args, **kwargs):
+        report = certify(*args, **kwargs)
+        initial_certificates.append(report)
+        return report
+
+    monkeypatch.setattr(strong_force, "certify_strong_force", record_certificate)
     inp = VmecInput.from_file(DATA / "input.solovev").change_resolution(
         mpol=3,
         ntor=0,
@@ -1584,7 +1713,13 @@ def test_public_solver_auto_attaches_an_already_certified_native_state():
     assert result.native_equilibrium is not None
     assert result.strong_force is not None
     assert result.polish_report.converged
-    assert result.polish_report.termination_reason == "already-certified"
+    initial = initial_certificates[0]
+    assert float(initial.normalized_l2) <= 3.0
+    assert float(initial.radial_refinement_difference) > 1.0e-3
+    assert result.polish_report.termination_reason == "independently-certified"
+    assert result.polish_report.nonlinear_iterations > 0
+    assert float(result.strong_force.radial_refinement_difference) <= 1.0e-3
+    assert float(result.strong_force.minimum_signed_jacobian) > 0.0
     assert result.polished_state is not None
     assert result.state.R_cos.shape == (5, 3)
     assert result.polished_state.R_cos.shape == result.state.R_cos.shape

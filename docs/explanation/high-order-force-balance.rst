@@ -207,10 +207,14 @@ default.
 Acceptance is the certificate, not solver convergence
 -----------------------------------------------------
 
-A polished state is accepted when three independent certificate checks pass:
+Both drivers accept a polished state only when all three certificate checks pass:
 ``normalized_l2 <= validation_tolerance`` (default ``1e-2``),
 ``radial_refinement_difference <= radial_refinement_tolerance`` (default
-``1e-3``), and a strictly positive minimum signed Jacobian.  The Gauss--Newton
+``1e-3``), and a strictly positive minimum signed Jacobian.  All three metrics
+must be finite; both norm/difference metrics must be nonnegative.  When
+``validation_tolerance=None``, the force threshold is ``tolerance``.  These
+checks apply to early returns as well as final acceptance; nonfinite values
+are named in the failure message.  The Gauss--Newton
 solver's own relative stationarity tolerance is recorded as
 ``least_squares_success`` and is a diagnostic only.
 
@@ -267,7 +271,7 @@ Driver sequence
 :func:`~vmex.core.polish_driver.polish_legacy_solution` is the only entry point
 the solver uses.  It refines the converged legacy state with the implicit
 Newton anchor, lifts it into the spline basis, and evaluates the independent
-certificate.  A state already inside ``validation_tolerance`` returns
+certificate.  A state satisfying all three acceptance checks above returns
 immediately with ``termination_reason="already-certified"`` and an empty
 correction; no chart, factorization, or solve is constructed.
 
