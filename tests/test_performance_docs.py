@@ -180,11 +180,20 @@ def test_polish_sweep_memory_artifact_shows_the_fix_it_claims() -> None:
         > 4.0 * shipped["certificate_peak_rss_bytes"]
     )
     # The remat boundary is the reverse-mode half: batching alone leaves the
-    # chart build storing whole-grid linearization residuals.
-    assert (
-        arms["batched"]["detail"]["chart_peak_rss_bytes"]
-        > 1.5 * shipped["chart_peak_rss_bytes"]
-    )
+    # chart build storing whole-grid linearization residuals.  On the
+    # measurement host that arm does not survive the chart stage at all --
+    # the record stops at "chart" with no chart peak -- which is the stronger
+    # statement; where it does survive, it must cost well over the shipped
+    # policy's chart peak.
+    batched = arms["batched"]
+    if batched["completed"]:
+        assert (
+            batched["detail"]["chart_peak_rss_bytes"]
+            > 1.5 * shipped["chart_peak_rss_bytes"]
+        )
+    else:
+        assert batched["detail"]["stage"] == "chart"
+        assert "chart_peak_rss_bytes" not in batched["detail"]
     assert "polish_memory_w7x.json" in (
         ROOT / "docs" / "reference" / "performance.rst"
     ).read_text()

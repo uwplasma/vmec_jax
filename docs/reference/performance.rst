@@ -152,14 +152,19 @@ configuration (``MPOL = NTOR = 10``, ``ns`` 13/25/51) — the resolution at
 which polishing was reported to run out of memory.
 
 The ``flat`` arm is the pre-0.8.2 sweep: one ``vmap`` over every evaluation
-point, which asks for a single 34 GB allocation on the first certificate.
-``batched`` schedules the same per-point kernel in automatically sized
-batches; ``auto`` is the shipped policy, which additionally checkpoints the
-kernel so reverse-mode passes stay per-batch.  Values and derivatives are
-identical across all three by construction and by test; only the schedule
-differs.  This is a memory record, not a runtime claim: the batched arms
-trade a modest amount of time for the memory, and the wall times in the
-record include that trade.
+point, which asks for a single 34 GB allocation on the first certificate —
+34.3 GiB peak resident on the 36-core, 62 GB office host, after which the
+arm is killed building the chart.  ``batched`` schedules the same per-point
+kernel in automatically sized batches: its certificate peaks at 3.0 GiB,
+but without checkpointing the chart build still stores whole-grid
+linearization residuals and the arm dies there too (a single 79 GB
+allocation).  ``auto`` is the shipped policy, which additionally checkpoints
+the kernel so reverse-mode passes stay per-batch: 3.0 GiB at the
+certificate, 15.7 GiB at the chart, and it completes.  Values and
+derivatives are identical across all three by construction and by test;
+only the schedule differs.  This is a memory record, not a runtime claim:
+the batched arms trade a modest amount of time for the memory, and the wall
+times in the record include that trade.
 
 Polish cost prediction
 ----------------------
