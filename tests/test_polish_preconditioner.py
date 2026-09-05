@@ -1909,6 +1909,13 @@ def test_public_solver_auto_corrects_a_lift_that_fails_quadrature(monkeypatch):
         polish_config=PolishConfig(
             radial_degree=3,
             validation_tolerance=3.0,
+            # AUTO prices the solve from one measured linear product times
+            # the iteration limits, so the price scales with machine load:
+            # this deck priced 501 s on an idle 36-core host and 45 068 s on
+            # a loaded laptop, and the default budget then declines it.
+            # This test is about the correction of a lift that fails
+            # quadrature, not the gate, which has its own tests.
+            auto_budget_seconds=1.0e9,
         ),
     )
     assert result.converged
