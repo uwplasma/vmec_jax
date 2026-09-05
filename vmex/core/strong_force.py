@@ -555,10 +555,10 @@ class StrongForceReport:
     flux_surface_normalized_l2: Array
     angular_spectral_tail: Array
     radial_refinement_difference: Array
-    #: Smallest signed Jacobian on the sample, in machine units.
+    # Smallest signed Jacobian on the sample, in machine units.
     minimum_signed_jacobian: Array
-    #: The same minimum divided by the mean absolute Jacobian: scale-free, so it is
-    #: comparable across devices.  See :func:`_nestedness_margin`.
+    # The same minimum divided by the mean absolute Jacobian: scale-free, so it is
+    # comparable across devices.  See :func:`_nestedness_margin`.
     nestedness_margin: Array
     boundary_residual: Array
     gauge_residual: Array
