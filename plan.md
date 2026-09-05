@@ -1558,7 +1558,7 @@ status and never blocks.
 | 11 | #257 API reference | green except codecov | Rebase on 1–10 (touches polish/implicit/virtual casing/omnigenity); its docstring guard then covers everything above; merge |
 | 12 | #265 optimizer output + free-boundary adjoint | green except codecov | Split: the trial printing and the duplicate-gradient fix merge; `adjoint_fail="best_effort"` stays opt-in and is never used by a certified example (F1) |
 | 13 | #266 coil target/seed/profile | stacked on #265 | Merge after 12 |
-| 14 | #261 polish memory/AUTO/heartbeat | rebased onto main including #269/#270 (29 commits, clean); #269's route-test stubs now accept the driver's `progress` keyword (68 route tests pass); memory and cost artifacts committed (see the previous row's numbers); one local driver-subset test was failing on the rebased branch at the time of writing and is being identified | Merge when its lanes are green; then 0.8.2 |
+| 14 | #261 polish memory/AUTO/heartbeat | **merged 2026-09-05** (189b75fb): the batched, checkpointed certificate (W7-X 34.23 GiB → 3.02 GiB certificate / 15.44 GiB chart, artifact committed), the priced AUTO with `POLISH_BUDGET`, the live Gauss–Newton heartbeat, and the honest README scope; rebased over #258, #269/#270 and #280; its parity lanes ran green at e-polish 44 min and f-options 14 min | 0.8.2 is ready to tag — a maintainer action |
 | 15 | #197 contributor examples | behind main | Rebase (`codex/scalar-optimization-drivers-rebased` is clean); add the one-sentence trade note; merge as examples |
 | 16 | #280 force-error normalizations (was #275/#279) | **merged 2026-09-05** (445ab9a7). It took three rounds after the rebase over #258: regenerate the pinned certificate baseline for the two redefined fields; give #269's stand-in certificates the new `window_normalizations`; and replace the guard's array byte-hashes with L2/Linf norms plus an absolute floor of 1e-12 for scalars, because the same arithmetic differs by 1e-12 to 4e-12 between Apple silicon and the x86 runners and a hash can only pass on the machine that wrote it. Every "26-fold" number is retired | — |
 | 17 | #272 Γ_c prompt-loss wording | **merged 2026-09-05** (eb2fdc1d) | — |
@@ -1568,7 +1568,7 @@ new polish tests in #261 (a live-progress heartbeat at 307 s, the ntor = 1 proje
 paths at ~150 s each, all real polishes on an M4) carry `@pytest.mark.full` and run nightly; lane e had reached 25 minutes on
 main after #269's 705-s Solov'ev correction and timed out at 55 with them in the PR tier.
 
-After step 14, tag **v0.8.2** with #261, #254, #258, #259 and #262: a
+Steps 1–17 are complete. Tag **v0.8.2** with #261, #254, #258, #259 and #262 (a maintainer action): a
 user-facing release (no OOM at W7-X scale, a priced AUTO, a heartbeat, a
 cache that does not slow down with age, correct certificate diagnostics)
 that makes no new 3-D accuracy claim.
