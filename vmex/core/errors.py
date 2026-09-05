@@ -324,6 +324,10 @@ class StrongForceCertificationError(VmecNumericalError):
     the two refinement fields keep their defaults; they say nothing about
     the run.
 
+    Driver failures carry the solver flag and force/quadrature thresholds.
+    Derivative eligibility failures carry the recomputed scaled
+    ``stationarity_norm`` and its ``stationarity_tolerance``.
+
     Attributes
     ----------
     solver_converged:
@@ -355,6 +359,8 @@ class StrongForceCertificationError(VmecNumericalError):
     tolerance: float = 0.0
     radial_refinement: float = float("inf")
     radial_refinement_tolerance: float = 0.0
+    stationarity_norm: float = float("inf")
+    stationarity_tolerance: float = 0.0
 
 
 @dataclass

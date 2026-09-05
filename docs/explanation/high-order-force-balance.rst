@@ -373,13 +373,34 @@ backward linearization.  Reusing a discretization does not reuse its original
 native parameter values; callers still need a stationary correction for the
 current inputs.
 
+The derivative entry points first check nonlinear stationarity for the current
+native inputs.  For primal coordinates ``c=D*y`` and residual ``r/a``, the
+checked gradient is ``D*g/a**2``.  ``PolishContext`` retains the diagonal
+variable scale ``D``, residual scale ``a``, and initial scaled-gradient norm
+``reference``.  Manually constructed contexts default to unit residual scale
+and unit reference; callers can supply their own scaling explicitly.
+``PolishLinearConfig`` sets the derivative threshold to
+``max(stationarity_atol, stationarity_rtol * max(reference, 1))``, with defaults
+``1e-11`` and ``1e-8`` respectively.  It is independent of the primal solver's
+stopping tolerance and of force certification.
+
+A failed stationarity check skips the Krylov solve.  Eager ``fail_policy="raise"``
+raises :class:`~vmex.core.errors.StrongForceCertificationError` with the scaled
+gradient norm and threshold.  ``fail_policy="nan"`` and failures under JIT return
+NaN derivatives and a false status.  The custom VJP performs the same check in
+its backward pass.  A context's existence or a passing force certificate alone
+does not establish derivative eligibility.
+
 Both Jacobian actions are JAX JVPs/VJPs of ``g``; SOLVAX GMRES solves the
 tangent and the transposed adjoint system, right-preconditioned by the squared
-variable scales already computed for the primal solve.  A true-residual check
-runs on every solve and raises a typed
-:class:`~vmex.core.errors.StrongForceLinearSolveError`, or poisons the result
-with NaN, when the tolerance is missed.  Forward-mode users call
-:func:`~vmex.core.polish_implicit.collocation_polish_tangent` directly.
+variable scales.  The already-computed primal ``g`` from linearization supplies
+the stationarity check.  Each attempted Krylov solve also checks a finite,
+recomputed unpreconditioned residual, raising
+:class:`~vmex.core.errors.StrongForceLinearSolveError` in eager raise mode or
+returning NaNs on failure.  Public tangent/adjoint reports distinguish
+``stationarity_converged`` and ``linear_converged``; ``converged`` requires both.
+A skipped linear solve reports zero iterations and NaN linear norms.  Forward
+sensitivities use :func:`~vmex.core.polish_implicit.collocation_polish_tangent`.
 
 Dot-product tests cover the chain: native profiles and geometry, collocation
 residual, reduced coordinate packing, and the high/low transfer.  The
