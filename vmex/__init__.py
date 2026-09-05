@@ -51,7 +51,9 @@ links to the module that documents it.
 - :func:`~vmex.core.strong_force.evaluate_strong_force` →
   :class:`~vmex.core.strong_force.StrongForceSamples`;
   :func:`~vmex.core.strong_force.certify_strong_force` →
-  :class:`~vmex.core.strong_force.StrongForceReport` /
+  :class:`~vmex.core.strong_force.StrongForceReport` (carrying two
+  :class:`~vmex.core.strong_force.ForceErrorNormalizations`, whole-domain
+  and windowed) /
   :func:`~vmex.core.strong_force.plot_strong_force_report` — independent
   strong-force certificate
 - :func:`~vmex.core.omnigenity.boozer_spectrum_state` /
