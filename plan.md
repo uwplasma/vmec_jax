@@ -10,7 +10,8 @@ the remaining physics and distributed solver work is not yet implemented.
 
 - **Completed (2026-09-05 UTC):** scope missing-golden skips to external comparisons
   in `tests/test_optimize.py`. Worktree `/Users/rogeriojorge/local/vmex-optimizer-tests`,
-  branch `test/optimizer-fixture-scope`, based on `6e365a6f` / PR #270. This is
+  branch `test/optimizer-fixture-scope`, based on `6e365a6f` / PR #270.
+  Implementation `32ff7f3f`, [PR #273](https://github.com/uwplasma/vmex/pull/273). This is
   a sibling of the stationarity work in `/Users/rogeriojorge/local/vmex-stationarity`.
 - **Reproducer:** #269 C3D job 101254672103 ran 62 passed / 37 skipped; #270
   job 101254700521 ran 96 passed / 3 skipped. `GOLDEN_DIR=None` applied a
@@ -30,8 +31,7 @@ the remaining physics and distributed solver work is not yet implemented.
   review and none exists. Repository auto-merge is disabled. No bypass or merge
   was performed. #269's coverage drop is not a passing badge; repeat CI after
   this test-selection repair is integrated. Other required stack CI passed.
-- **Next:** commit/push a scoped PR on #270,
-  then return to `vmex-stationarity` for the nonlinear derivative gate and its
+- **Next:** await CI/review for #273, then return to `vmex-stationarity` for the nonlinear derivative gate and its
   CPU/GPU checks. Keep both branches' results in the active plan before resuming
   A's remaining acceptance, benchmark and admissibility tasks.
 
