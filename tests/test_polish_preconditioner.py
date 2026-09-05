@@ -1081,6 +1081,14 @@ def test_polish_driver_records_bounded_unpolished_return(
 ):
     class InitialCertificate:
         normalized_l2 = jnp.asarray(2.0)
+        # the driver now reports the non-saturating window normalizations
+        # beside eps_F, so a stand-in certificate has to carry them
+        window_normalizations = SimpleNamespace(
+            volume_average_force=jnp.asarray(1.0),
+            relative_force_error=jnp.asarray(1.0),
+            magnetic_relative_force_error=jnp.asarray(1.0),
+            s_min=0.1, s_max=0.99,
+        )
 
     config = PolishConfig(
         max_continuation_stages=1,
@@ -1159,6 +1167,14 @@ def test_polish_driver_skips_an_already_certified_state(small_strong_root):
     class InitialCertificate:
         normalized_l2 = jnp.asarray(1.0e-9)
         minimum_signed_jacobian = jnp.asarray(0.5)
+        # the driver now reports the non-saturating window normalizations
+        # beside eps_F, so a stand-in certificate has to carry them
+        window_normalizations = SimpleNamespace(
+            volume_average_force=jnp.asarray(1.0),
+            relative_force_error=jnp.asarray(1.0),
+            magnetic_relative_force_error=jnp.asarray(1.0),
+            s_min=0.1, s_max=0.99,
+        )
 
     result = polish_strong_root(
         small_strong_root,
