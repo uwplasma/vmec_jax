@@ -1546,29 +1546,34 @@ status and never blocks.
 | Step | PR | State on 2026-09-05 | Action before merge |
 |---|---|---|---|
 | 1 | #267 → #268 → #269 → #270 | **merged 2026-09-05** (b19e4cc3, 62e64f1f, edd4c2fd, 7c2ebc12) after the post-squash rebase of each stacked branch; this revision is now based on main | — |
-| 2 | #264 LASYM/Solov'ev | green | Merge |
-| 3 | #263 mirror audit | green | Merge; rebase only if plan.md conflicts with step 1 |
-| 4 | #262 failure policy | green | Merge |
-| 5 | #260 native DESC | green | Merge |
+| 2 | #264 LASYM/Solov'ev | **merged 2026-09-05** (92151ab6) | — |
+| 3 | #263 mirror audit | **merged 2026-09-05** (a2a945cc) after a rebase over step 1 (plan.md kept main's) | — |
+| 4 | #262 failure policy | **merged 2026-09-05** (6f971564); its c3d lane died once at 50 min with no log and passed on re-run | — |
+| 5 | #260 native DESC | **merged 2026-09-05** (07e129d8); the misc lane failed once on an HTTP 502 fetching the golden digests and passed on re-run | — |
 | 6 | #258 certificate diagnostics | **merged 2026-09-05** (1716594a) | — |
-| 7 | #259 symmetry flags | green except codecov | Merge |
+| 7 | #259 symmetry flags | **merged 2026-09-05** (ecdca62e) | — |
 | 8 | #254 cache entry bound | **merged 2026-09-05** (928d4fc3) | — |
-| 9 | #253 hygiene | green | Rebase on 1–8 (README, performance.rst); merge |
-| 10 | #256 figures/validation page | green | Rebase on 9 (README, performance.rst, manifest); merge |
-| 11 | #257 API reference | green except codecov | Rebase on 1–10 (touches polish/implicit/virtual casing/omnigenity); its docstring guard then covers everything above; merge |
+| 9 | #253 hygiene | **merged 2026-09-05** (b7538376) | — |
+| 10 | #256 figures/validation page | rebased on 9: kept its no-GPU-claim performance text over #253's; merged the two historical artifacts' provenance blocks with #253's committing-commit SHAs and `input_data_embedded` false (the files hold no deck); CI pending | Merge when green; retarget #276 to main first |
+| 11 | #257 API reference | rebased on 1–10 twice (the #258, #261 and #262 docstrings folded in; stale `angular_spectral_tail`, `nestedness_margin` and `am` text corrected; `ForceErrorNormalizations` indexed; two field notes demoted so autodoc `-W` does not see them twice); CI pending | Merge when green; retarget #265 to main first |
 | 12 | #265 optimizer output + free-boundary adjoint | green except codecov | Split: the trial printing and the duplicate-gradient fix merge; `adjoint_fail="best_effort"` stays opt-in and is never used by a certified example (F1) |
 | 13 | #266 coil target/seed/profile | stacked on #265 | Merge after 12 |
 | 14 | #261 polish memory/AUTO/heartbeat | **merged 2026-09-05** (189b75fb): the batched, checkpointed certificate (W7-X 34.23 GiB → 3.02 GiB certificate / 15.44 GiB chart, artifact committed), the priced AUTO with `POLISH_BUDGET`, the live Gauss–Newton heartbeat, and the honest README scope; rebased over #258, #269/#270 and #280; its parity lanes ran green at e-polish 44 min and f-options 14 min | 0.8.2 is ready to tag — a maintainer action |
 | 15 | #197 contributor examples | behind main | Rebase (`codex/scalar-optimization-drivers-rebased` is clean); add the one-sentence trade note; merge as examples |
 | 16 | #280 force-error normalizations (was #275/#279) | **merged 2026-09-05** (445ab9a7). It took three rounds after the rebase over #258: regenerate the pinned certificate baseline for the two redefined fields; give #269's stand-in certificates the new `window_normalizations`; and replace the guard's array byte-hashes with L2/Linf norms plus an absolute floor of 1e-12 for scalars, because the same arithmetic differs by 1e-12 to 4e-12 between Apple silicon and the x86 runners and a hash can only pass on the machine that wrote it. Every "26-fold" number is retired | — |
 | 17 | #272 Γ_c prompt-loss wording | **merged 2026-09-05** (eb2fdc1d) | — |
+| 18 | #278 kind-aware `am` scaling | **merged 2026-09-05** (fedde0a9) | — |
+| 19 | #273 optimizer fixture scope | rebased on main; the 34 optimizer tests pass without the golden fixtures; CI pending | Merge when green |
+| 20 | #277 stationarity before polished derivatives | rebased on main; 142 polish tests pass; CI pending | Merge when green |
+| 21 | #271 flux-tube ε/R0 | auto-closed when #263's branch was deleted (GitHub closes every PR based on a deleted branch); rebased on main and reopened; CI pending | Merge when green |
+| 22 | #276 (stacked on #256) | open, base #256 | Retarget to main before #256 merges, then rebase |
 
 CI shape after this round: the polish lane was split again — `test_run_options.py` is lane f on its own, and the four heaviest
 new polish tests in #261 (a live-progress heartbeat at 307 s, the ntor = 1 projection diagnostics at 235 s, two AUTO pricing
 paths at ~150 s each, all real polishes on an M4) carry `@pytest.mark.full` and run nightly; lane e had reached 25 minutes on
 main after #269's 705-s Solov'ev correction and timed out at 55 with them in the PR tier.
 
-Steps 1, 6, 8, 14, 16 and 17 are merged (2026-09-05); steps 2–5, 7, 9–13 and 15 are still open and most are now BEHIND main, so each needs a rebase — #263 and #264 edit the old plan's ledger and must re-express those edits against this file. Tag **v0.8.2** once #259 and #262 are in (a maintainer action): a
+Steps 1–9, 14 and 16–18 are merged (2026-09-05). Steps 10, 11 and 19–21 are rebased on main with CI pending; 12, 13, 15 and 22 wait on them. With #259 and #262 in, **v0.8.2 can be tagged now** (a maintainer action). Two merge-mechanics facts learned on the way: a push and a base retarget within the same minute start two CI runs for one SHA and `cancel-in-progress` kills one, so wait on the surviving run id, not the head SHA; and deleting a merged PR's branch closes every PR stacked on it, so retarget dependents to main first.
 user-facing release (no OOM at W7-X scale, a priced AUTO, a heartbeat, a
 cache that does not slow down with age, correct certificate diagnostics)
 that makes no new 3-D accuracy claim.
