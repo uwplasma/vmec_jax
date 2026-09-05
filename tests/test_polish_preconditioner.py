@@ -1316,6 +1316,14 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
     certificate = SimpleNamespace(
         normalized_l2=0.0, radial_refinement_difference=0.0,
         minimum_signed_jacobian=0.5,
+        # the driver reports the non-saturating window normalizations
+        # beside eps_F on every route, so the stand-in carries them
+        window_normalizations=SimpleNamespace(
+            volume_average_force=jnp.asarray(1.0),
+            relative_force_error=jnp.asarray(1.0),
+            magnetic_relative_force_error=jnp.asarray(1.0),
+            s_min=0.1, s_max=0.99,
+        ),
     )
     setattr(certificate, field, value)
     native = SimpleNamespace(R_cos=jnp.zeros(1))
@@ -1351,7 +1359,10 @@ def test_polish_certificate_routes(monkeypatch, route, field, value, accepted):
     elif route == "continuation-final":
         config = dataclasses.replace(config, preconditioner="none")
         initial = SimpleNamespace(normalized_l2=1.0, radial_refinement_difference=0.0,
-                                  minimum_signed_jacobian=0.5)
+                                  minimum_signed_jacobian=0.5,
+            window_normalizations=SimpleNamespace(
+                volume_average_force=jnp.asarray(1.0), relative_force_error=jnp.asarray(1.0),
+                magnetic_relative_force_error=jnp.asarray(1.0), s_min=0.1, s_max=0.99))
         continuation = lambda *a, **k: SimpleNamespace(  # noqa: E731
             x=jnp.zeros(1), alpha=1.0, converged=True, steps=())
         monkeypatch.setattr(driver, "_solvax_continuation_api",
