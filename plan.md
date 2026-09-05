@@ -1545,17 +1545,17 @@ status and never blocks.
 | 3 | #263 mirror audit | green | Merge; rebase only if plan.md conflicts with step 1 |
 | 4 | #262 failure policy | green | Merge |
 | 5 | #260 native DESC | green | Merge |
-| 6 | #258 certificate diagnostics | green after the docutils fix | Merge |
+| 6 | #258 certificate diagnostics | **merged 2026-09-05** (1716594a) | — |
 | 7 | #259 symmetry flags | green except codecov | Merge |
-| 8 | #254 cache entry bound | coverage now 95% | Merge |
+| 8 | #254 cache entry bound | **merged 2026-09-05** (928d4fc3) | — |
 | 9 | #253 hygiene | green | Rebase on 1–8 (README, performance.rst); merge |
 | 10 | #256 figures/validation page | green | Rebase on 9 (README, performance.rst, manifest); merge |
 | 11 | #257 API reference | green except codecov | Rebase on 1–10 (touches polish/implicit/virtual casing/omnigenity); its docstring guard then covers everything above; merge |
 | 12 | #265 optimizer output + free-boundary adjoint | green except codecov | Split: the trial printing and the duplicate-gradient fix merge; `adjoint_fail="best_effort"` stays opt-in and is never used by a certified example (F1) |
 | 13 | #266 coil target/seed/profile | stacked on #265 | Merge after 12 |
-| 14 | #261 polish memory/AUTO/heartbeat | parity c2 red: missing artifact | Commit `benchmarks/polish_memory_w7x.json` from the office rerun or delete the gate; then 0.8.2 |
+| 14 | #261 polish memory/AUTO/heartbeat | parity c2 red: missing artifact; branch rebased onto main with #258 (27 commits, clean) and two commits the dead agent never pushed are now on it | Commit `benchmarks/polish_memory_w7x.json` from the office rerun (first run: `measurement_dirty` true because the harness's own `arm_*.json` dirtied the checkout — use `--scratch`; second run: the `auto` arm died with SIGSEGV in the chart build at 6.85 GiB, an intermittent native crash on the office box that must be recorded with the artifact; third run in flight); then 0.8.2 |
 | 15 | #197 contributor examples | behind main | Rebase (`codex/scalar-optimization-drivers-rebased` is clean); add the one-sentence trade note; merge as examples |
-| 16 | `physics/force-error-normalizations` (no PR yet) | 4 commits pushed, unverified | Rebase on 6 and 14, run `tests/test_strong_force.py` and the polish suites, open the PR; it retires every "26-fold" number |
+| 16 | #275 force-error normalizations | preflight PASS, 33 strong-force tests; rebased onto main after #258 (one appended-tests conflict resolved) | Re-verify against #258's `nestedness_margin` redefinition (its committed certificate baseline predates it), push, merge; it retires every "26-fold" number |
 | 17 | #272 Γ_c prompt-loss wording | docs only | Merge; it corrects a statement #250 introduced (below) |
 
 After step 14, tag **v0.8.2** with #261, #254, #258, #259 and #262: a
