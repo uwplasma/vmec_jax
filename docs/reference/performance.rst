@@ -161,8 +161,9 @@ linearization residuals and the arm dies there too (a single 79 GB
 allocation).  ``auto`` is the shipped policy, which additionally checkpoints
 the kernel so reverse-mode passes stay per-batch: 3.0 GiB at the
 certificate, 15.4 GiB at the chart, and it completes.  Values and
-derivatives are identical across all three by construction and by test;
-only the schedule differs.  This is a memory record, not a runtime claim:
+derivatives agree across all three to round-off of each field's scale
+(2e-12 of max|J| for the current density, whose near-zero entries in a
+vacuum field are pure cancellation); only the schedule differs.  This is a memory record, not a runtime claim:
 the batched arms trade a modest amount of time for the memory, and the wall
 times in the record include that trade.
 

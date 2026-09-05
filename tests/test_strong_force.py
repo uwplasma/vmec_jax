@@ -374,12 +374,19 @@ def test_batched_point_sweep_matches_flat_vmap_values_and_gradients():
     np.testing.assert_allclose(plain_value, batched_value, rtol=1.0e-13)
     np.testing.assert_allclose(plain_grad, batched_grad, rtol=1.0e-11)
 
+    # Batching changes the fusion XLA picks, so the two sweeps agree to
+    # round-off of each field's own scale, not element by element: the
+    # current density is a curl of B built from nested derivatives, and its
+    # near-zero entries in a vacuum field are pure cancellation (2e-12 of
+    # max|J| on Apple silicon, and a different 2e-12 on the x86 runner).
     for name in flat_samples.__dataclass_fields__:
+        flat = np.asarray(getattr(flat_samples, name))
+        scale = float(np.max(np.abs(flat))) if flat.dtype.kind == "f" else 0.0
         np.testing.assert_allclose(
             np.asarray(getattr(batched_samples, name)),
-            np.asarray(getattr(flat_samples, name)),
-            rtol=1.0e-13,
-            atol=1.0e-13,
+            flat,
+            rtol=1.0e-12,
+            atol=1.0e-11 * max(scale, 1.0),
             err_msg=name,
         )
     np.testing.assert_allclose(batched_value, flat_value, rtol=1.0e-12)
