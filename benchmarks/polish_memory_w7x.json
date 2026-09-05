@@ -1,0 +1,120 @@
+{
+  "arms": [
+    {
+      "completed": false,
+      "detail": {
+        "certificate_absolute_l2": 4327211.24977094,
+        "certificate_peak_rss_bytes": 36750721024,
+        "certificate_seconds": 60.31497054803185,
+        "legacy_seconds": 43.68527871603146,
+        "lift_peak_rss_bytes": 2561179648,
+        "mode": "flat",
+        "resolution": {
+          "mnmax": 200,
+          "mpol": 10,
+          "ns": 51,
+          "ntor": 10,
+          "radial_basis_size": 27
+        },
+        "stage": "chart",
+        "sweep_policy": {
+          "batch": false,
+          "checkpoint": false,
+          "max_batch": 4096,
+          "min_batch": 128,
+          "working_set_bytes": 536870912
+        }
+      },
+      "exit_status": "exit 1",
+      "mode": "flat",
+      "peak_rss_bytes": 36750721024,
+      "wall_seconds": 608.6134608159773
+    },
+    {
+      "completed": false,
+      "detail": {
+        "certificate_absolute_l2": 4327211.249770932,
+        "certificate_peak_rss_bytes": 3277991936,
+        "certificate_seconds": 114.90037396200933,
+        "legacy_seconds": 22.918707683915272,
+        "lift_peak_rss_bytes": 2447921152,
+        "mode": "batched",
+        "resolution": {
+          "mnmax": 200,
+          "mpol": 10,
+          "ns": 51,
+          "ntor": 10,
+          "radial_basis_size": 27
+        },
+        "stage": "chart",
+        "sweep_policy": {
+          "batch": true,
+          "checkpoint": false,
+          "max_batch": 4096,
+          "min_batch": 128,
+          "working_set_bytes": 536870912
+        }
+      },
+      "exit_status": "exit 1",
+      "mode": "batched",
+      "peak_rss_bytes": 7630512128,
+      "wall_seconds": 542.1035224229563
+    },
+    {
+      "completed": true,
+      "detail": {
+        "certificate_absolute_l2": 4327211.249770932,
+        "certificate_peak_rss_bytes": 3237949440,
+        "certificate_seconds": 81.57234309101477,
+        "chart_peak_rss_bytes": 16575180800,
+        "chart_seconds": 1751.165110305068,
+        "chart_size": 10573,
+        "legacy_seconds": 26.00542627100367,
+        "lift_peak_rss_bytes": 2421686272,
+        "mode": "auto",
+        "peak_rss_bytes": 16575180800,
+        "resolution": {
+          "mnmax": 200,
+          "mpol": 10,
+          "ns": 51,
+          "ntor": 10,
+          "radial_basis_size": 27
+        },
+        "stage": "chart",
+        "sweep_batch_points": 4096,
+        "sweep_policy": {
+          "batch": true,
+          "checkpoint": true,
+          "max_batch": 4096,
+          "min_batch": 128,
+          "working_set_bytes": 536870912
+        },
+        "total_seconds": 1957.5600386100123
+      },
+      "exit_status": "exit 0",
+      "mode": "auto",
+      "peak_rss_bytes": 16575180800,
+      "wall_seconds": 1959.1187770729885
+    }
+  ],
+  "deck": {
+    "name": "input.W7X_standard_polish_test",
+    "sha256_prefix": "2a4c98c4e97a6d8f"
+  },
+  "provenance": {
+    "host": "",
+    "input_data_embedded": false,
+    "jax_backend": "cpu",
+    "jax_version": "0.9.2",
+    "machine": "x86_64",
+    "measurement_commit": "529f17890858242532942eeab77da3be030a401f",
+    "measurement_dirty": false,
+    "platform": "Linux-7.0.11-76070011-generic-x86_64-with-glibc2.35",
+    "python_version": "3.12.13",
+    "vmex_module": "vmex/__init__.py",
+    "vmex_version": "0.8.1",
+    "x64": true
+  },
+  "schema": "vmex.polish-sweep-memory/1",
+  "stage": "chart"
+}

@@ -160,7 +160,7 @@ but without checkpointing the chart build still stores whole-grid
 linearization residuals and the arm dies there too (a single 79 GB
 allocation).  ``auto`` is the shipped policy, which additionally checkpoints
 the kernel so reverse-mode passes stay per-batch: 3.0 GiB at the
-certificate, 15.7 GiB at the chart, and it completes.  Values and
+certificate, 15.4 GiB at the chart, and it completes.  Values and
 derivatives are identical across all three by construction and by test;
 only the schedule differs.  This is a memory record, not a runtime claim:
 the batched arms trade a modest amount of time for the memory, and the wall
