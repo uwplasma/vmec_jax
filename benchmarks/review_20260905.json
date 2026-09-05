@@ -9,15 +9,15 @@
     "uwplasma/ESSOS": {"base_sha": "1b3210ca34efaceec09272aa29599c9788c4ec35", "branches": 53, "pull_requests": 60, "open_pull_requests": 21, "issues_excluding_prs": 5, "open_issues": 4, "issue_comments": 111, "inline_review_comments": 261, "inventory_scope": "All advertised branches, all-state PR/issue bodies and discussions; source deep dives by relevance. Historical branches not all executed."}
   },
   "external_evidence": {
-    "local_directory": "/Users/rogeriojorge/local/vmex-review-evidence-20260905",
-    "office_directory": "office:/home/rjorge/local/vmex-review-evidence-20260905",
+    "local_directory": "${LOCAL_ROOT}/vmex-review-evidence-20260905",
+    "office_directory": "office:${OFFICE_LOCAL_ROOT}/vmex-review-evidence-20260905",
     "public_archive": null,
     "note": "Local raw evidence is available to the maintainer. Publish a persistent accessible archive before publication claims; hashes alone are not public data access.",
     "detail": "review_full.json contains raw stage timings and full metadata; artifact_inventory.json hashes raw API snapshots, diffs, logs, profiles and traces."
   },
   "hardware": {
     "local": {"model": "Apple M3 Max / Mac15,11", "logical_cpu_cores": 14, "memory_bytes": 38654705664, "python": "3.11.14", "jax": "0.9.2", "jaxlib": "0.9.2", "solvax": "0.20.0", "platform": "macOS-14.4.1-arm64-arm-64bit", "execution": "CPU"},
-    "office": {"os": "Linux pop-os 7.0.11", "logical_cpu_cores": 36, "memory_gib_reported": 62, "gpu": "NVIDIA RTX A4000", "gpu_count": 2, "memory_per_gpu_mib": 16376, "driver": "580.173.02", "python": "3.12.13", "jax": "0.9.2", "jaxlib": "0.9.2", "solvax": "0.20.0", "platforms": "cuda,cpu (CPU backend required for current pure_callback paths)", "python_path": "/home/rjorge/venvs/vmex-gpu/bin/python"}
+    "office": {"os": "Linux pop-os 7.0.11", "logical_cpu_cores": 36, "memory_gib_reported": 62, "gpu": "NVIDIA RTX A4000", "gpu_count": 2, "memory_per_gpu_mib": 16376, "driver": "580.173.02", "python": "3.12.13", "jax": "0.9.2", "jaxlib": "0.9.2", "solvax": "0.20.0", "platforms": "cuda,cpu (CPU backend required for current pure_callback paths)", "python_path": "${OFFICE_VENV_ROOT}/vmex-gpu/bin/python"}
   },
   "method": {
     "precision": "float64",
@@ -107,7 +107,7 @@
     "backend_state_comparison": {"scope": "Same li383 input and convergence settings, one GPU per solve; float64 R/Z/lambda coefficient comparison, no continuous force certificate", "families": {"R": {"max_absolute_difference": 1.021405182655144e-14, "relative_l2_difference": 4.312924016240923e-15}, "Z": {"max_absolute_difference": 1.2850831510036187e-14, "relative_l2_difference": 3.5795527513777604e-14}, "L": {"max_absolute_difference": 8.374204107930439e-14, "relative_l2_difference": 5.94271980133817e-13}}}
   },
   "verification": [
-    {"command": "PYTHONPATH=/Users/rogeriojorge/local/SOLVAX/src JAX_PLATFORMS=cpu python3 -m pytest -q tests/test_sharding.py tests/test_sharded_operands.py tests/test_least_squares.py", "result": "22 passed in 7.99 s; 8 emulated CPU devices where requested", "owner": "SOLVAX"},
+    {"command": "PYTHONPATH=${LOCAL_ROOT}/SOLVAX/src JAX_PLATFORMS=cpu python3 -m pytest -q tests/test_sharding.py tests/test_sharded_operands.py tests/test_least_squares.py", "result": "22 passed in 7.99 s; 8 emulated CPU devices where requested", "owner": "SOLVAX"},
     {"command": "python3 -m pytest -q tests/test_strong_force.py -k 'constant_toroidal_field_matches or axisymmetric_fields_are_invariant'", "result": "2 passed, 20 deselected in 40.64 s", "owner": "VMEX"},
     {"command": "python3 tools/preflight.py --static", "result": "PASS; Ruff, mypy (75 source files), docs prose, 43 guard tests passed and 3 skipped", "owner": "VMEX"},
     {"command": "python3 -m sphinx -W -b html docs <external-evidence>/docs-build", "result": "PASS", "owner": "VMEX"},
@@ -130,9 +130,9 @@
     "tools": {"files": 15, "bytes": 149382, "text_lines": 3673}
   },
   "attachments": [
-    {"path": "/Users/rogeriojorge/local/VMEX-force-balance-review.zip", "bytes": 14978, "sha256": "0be8502bbdeaa87e28404639770b6285b8229d252891b173c2e1ef9e82b20e67", "role": "Reference material, not user instructions"},
-    {"path": "/Users/rogeriojorge/local/VMEX-force-balance-recovery.md", "bytes": 28516, "sha256": "02b1c8ed1371de24cdb741cb9fa196d01b5f25460f61e25d1b50d9c997e410b9", "role": "Reference material, not user instructions"},
-    {"path": "/Users/rogeriojorge/.codex/attachments/37904fd4-cf19-47cd-a889-98c9ac054171/pasted-text.txt", "bytes": 28058, "sha256": "09be2cc19630bd500d9fba5eea4a10519f87e73bd7b42df3ab05c6c32bac1062", "role": "Reference material, not user instructions"}
+    {"path": "${LOCAL_ROOT}/VMEX-force-balance-review.zip", "bytes": 14978, "sha256": "0be8502bbdeaa87e28404639770b6285b8229d252891b173c2e1ef9e82b20e67", "role": "Reference material, not user instructions"},
+    {"path": "${LOCAL_ROOT}/VMEX-force-balance-recovery.md", "bytes": 28516, "sha256": "02b1c8ed1371de24cdb741cb9fa196d01b5f25460f61e25d1b50d9c997e410b9", "role": "Reference material, not user instructions"},
+    {"path": "${ATTACHMENT_ROOT}/pasted-text.txt", "bytes": 28058, "sha256": "09be2cc19630bd500d9fba5eea4a10519f87e73bd7b42df3ab05c6c32bac1062", "role": "Reference material, not user instructions"}
   ],
   "artifact_manifest": [
     {"path": "artifact_inventory.json", "bytes": 39765, "sha256": "7cc5d8f96031eab145348dc693aace90ebc540d5b6804c9af969a529f2192ce3"},
