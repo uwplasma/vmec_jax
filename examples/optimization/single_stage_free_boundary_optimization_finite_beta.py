@@ -77,7 +77,7 @@ params = im.params_from_input(inp)
 config = vj.make_free_boundary_config(
     inp, BiotSavart(coils0), ns=NS, ftol=FTOL, max_iterations=NITER,
     adjoint_tol=1.0e-8, adjoint_solver="boundary_schur",
-    adjoint_fail="best_effort", field_from_parameters=field_from_u)
+    field_from_parameters=field_from_u)
 solver_context = im.runtime_from_params(params, config.implicit)
 
 # ne=n0(1-s^5), Te=Ti=T0(1-s); rescale n0*T0 to the peak pressure in AM.

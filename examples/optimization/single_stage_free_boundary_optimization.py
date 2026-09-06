@@ -77,7 +77,7 @@ params = im.params_from_input(inp)
 config = vj.make_free_boundary_config(
     inp, BiotSavart(coils0), ns=NS, ftol=FTOL, max_iterations=NITER,
     adjoint_tol=1.0e-8, adjoint_solver="boundary_schur",
-    adjoint_fail="best_effort", field_from_parameters=field_from_u)
+    field_from_parameters=field_from_u)
 solver_context = im.runtime_from_params(params, config.implicit)
 # Floor the profile minimum, not its average: a mean target is satisfiable while
 # an interior surface sits near zero transform, which is what a current-carried
