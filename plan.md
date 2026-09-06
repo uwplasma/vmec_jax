@@ -34,6 +34,60 @@ the remaining physics and distributed solver work is not yet implemented.
 - **Next:** await CI/review for #273, then return to `vmex-stationarity` for the nonlinear derivative gate and its
   CPU/GPU checks. Keep both branches' results in the active plan before resuming
   A's remaining acceptance, benchmark and admissibility tasks.
+- **Completed (2026-09-05 UTC):** implement nonlinear stationarity eligibility for
+  implicit polish derivatives. Resume `/Users/rogeriojorge/local/vmex-stationarity`,
+  branch `fix/polish-stationarity-certificate`, implementation `9087241b`,
+  [PR #277](https://github.com/uwplasma/vmex/pull/277), based on `6e365a6f` / #270.
+  Source, regression tests and documentation are validated locally; CI is pending. All
+  commits use author `rogeriojorge`; preserve original user worktrees.
+- **Merge audit:** #267 marked ready for review. Main requires one approving
+  GitHub review (ruleset 20655590); none exists. Repository auto-merge is disabled
+  (the enable request failed). Do not bypass either rule. #267/#268/#270 have
+  passing required CI and #268/#270 passing Codecov checks. #269 required CI and
+  patch coverage pass (100% changed lines), but project coverage is 94.79%
+  against 95%; the artifact audit reproduced the percentage and identified
+  a module-wide golden-fixture skip. Repair `32ff7f3f`, [PR #273](https://github.com/uwplasma/vmex/pull/273),
+  lives in sibling worktree `vmex-optimizer-tests` based on #270. Missing-golden
+  selection: before 6 skipped, after 5 passed / 1 genuine golden skip (12.33 s);
+  static preflight passed. Await its full CI; do not lower the coverage target.
+  No PR has been merged in this session.
+- **Completed stack:** plan [#267](https://github.com/uwplasma/vmex/pull/267) →
+  true linear residual [#268](https://github.com/uwplasma/vmex/pull/268)
+  (`b2bd9da6`) → shared finite force certificate
+  [#269](https://github.com/uwplasma/vmex/pull/269) (`02a31622`, `4c2d29a3`) →
+  current-native custom VJP [#270](https://github.com/uwplasma/vmex/pull/270)
+  (`ac759d09`). Prior CPU MHD integration and CPU/GPU focused regressions passed;
+  exact counts/commands remain in those PRs and prior plan revisions.
+- **Implemented:** preserve residual scale `a` and initial scaled-gradient
+  norm in `PolishContext`. Reuse `g` returned by `jax.linearize`/`jax.vjp`, and
+  check finite `||D*g/a**2||` against explicit derivative stationarity controls.
+  Skip Krylov on failure. Extend the existing report with distinct stationarity
+  and linear flags; eager `raise` is typed, transformed failure returns NaN plus
+  status. Save the added scaling provenance in the custom VJP along with its
+  actual forward native inputs. Physics acceptance remains independent.
+- **Validation:** 91 focused CPU tests passed (11.89 s): nonlinear stationarity,
+  separate linear-failure status, scaled/invalid inputs, true-residual controls,
+  analytic nonzero-residual exact-Hessian derivatives and changed-input VJP.
+  GPU subset: 87 passed (36.21 s) on office RTX A4000, JAX 0.9.2, float64,
+  explicitly enabled JIT. The four later-added linear/status combination cases
+  were checked on CPU. Full CPU MHD rejection/refinement tests: 2 passed,
+  215 deselected in 404.79 s. Static preflight and warning-strict Sphinx passed.
+- **MHD evidence:** the former loose `tolerance=2` fixture accepts the initial
+  GN state; default derivatives now reject it. Tightening only the nonlinear
+  solve tolerance to `1e-10` reaches stationarity in 11 steps (17 coordinates;
+  scaled norm `3.57e-9`, initial norm `89.20`) and passes the existing
+  tangent/adjoint, custom VJP, Boozer and stationarity Taylor checks. The force
+  thresholds remain deliberately loose test controls (EPS-F about 1.99); this
+  is an MHD derivative integration test, not an accurate-equilibrium benchmark.
+  No full GPU MHD test was started while both office GPUs reported 100% activity.
+- **Evidence:** CI artifacts for #269 and #270 are retained outside git under
+  `vmex-review-evidence-20260905/pr269-coverage` and `pr270-coverage`; the
+  stationary MHD probe and log are in their parent evidence directory. Never lower coverage targets
+  or weaken force/derivative thresholds to obtain a passing badge.
+- **Next:** inspect CI/reviews for #273 and #277; integrate the sibling fixture
+  repair into the stack as appropriate and merge in dependency order only once
+  checks and required review are satisfied. Continue A's export/resume acceptance,
+  admissibility and benchmark repairs before the B/C physics and recovery work.
 
 ## 1. Outcome and order of work
 
@@ -267,7 +321,7 @@ only generic solve-result semantics. **Exit:** every status means what it says.
   acceptance. Distinguish `legacy_converged`, `physics_certified`,
   `stationarity_certified`, and `derivative_certified` with explicit thresholds.
   Reuse the existing report/result owners instead of adding parallel report APIs.
-- [ ] A physical certificate can accept a state before GN stationarity, but its
+- [x] A physical certificate can accept a state before GN stationarity, but its
   stationarity-based implicit derivative must then fail or refine first. Under
   transformations return numerical values plus a usable status, with the host
   boundary raising a typed error when requested. NaN is never optimization data.

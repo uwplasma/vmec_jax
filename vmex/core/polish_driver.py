@@ -608,7 +608,11 @@ def _normalization_fields(
 
 
 class PolishContext(NamedTuple):
-    """Frozen chart and converged coordinates for implicit differentiation.
+    """Frozen discretization and scaling for derivative stationarity checks.
+
+    Manually constructed contexts use unit residual scale and reference norm.
+    A context's existence does not certify that its correction is stationary.
+    
 
     Everything needed to re-form the stationarity equation
     ``J(c, native).T @ r(c, native) = 0`` at the accepted correction, and
@@ -638,6 +642,8 @@ class PolishContext(NamedTuple):
     #: ``(chart.size,)``.  Its square is reused as the Jacobi preconditioner
     #: of the tangent and adjoint Krylov solves.
     variable_scale: jax.Array
+    residual_scale: jax.Array | float = 1.0
+    stationarity_reference: jax.Array | float = 1.0
 
 
 class PolishResult(NamedTuple):
@@ -2197,7 +2203,8 @@ def polish_collocation_least_squares(
             certificate,
             report,
             chart.lift(vector),
-            PolishContext(runtime, chart, vector, variable_scale_array),
+            PolishContext(runtime, chart, vector, variable_scale_array,
+                          collocation_scale_array, solution.history.gradient_norm[0]),
         )
     if config.fail_policy == "raise":
         raise StrongForceCertificationError(

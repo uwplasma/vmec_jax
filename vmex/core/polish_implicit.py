@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 from solvax import gmres
 
-from .errors import StrongForceLinearSolveError
+from .errors import StrongForceCertificationError, StrongForceLinearSolveError
 from .polish import (
     HighOrderCorrection,
     StrongPhysicalChart,
@@ -30,7 +30,12 @@ from .strong_force import HighOrderEquilibriumState
 
 @dataclass(frozen=True)
 class PolishLinearConfig:
-    """Krylov controls and failure policy for polished-root derivatives.
+    """Krylov and nonlinear-stationarity controls for polished derivatives.
+
+    Stationarity requires ``||D*g/a**2|| <= max(stationarity_atol,
+    stationarity_rtol * max(reference, 1))`` using the context's frozen primal
+    scales. Eager failures raise typed errors by default; JIT failures return
+    NaN derivatives and false report flags for either policy.
 
     One tangent or one adjoint costs exactly one preconditioned GMRES solve of
     the ``(chart.size, chart.size)`` stationarity operator, so these five
@@ -86,8 +91,14 @@ class PolishLinearConfig:
     restart: int = 30
     max_restarts: int = 30
     fail_policy: Literal["raise", "nan"] = "raise"
+    stationarity_rtol: float = 1.0e-8
+    stationarity_atol: float = 1.0e-11
 
     def __post_init__(self) -> None:
+        if not np.isfinite(self.stationarity_rtol) or self.stationarity_rtol <= 0.0:
+            raise ValueError("stationarity_rtol must be finite and positive")
+        if not np.isfinite(self.stationarity_atol) or self.stationarity_atol < 0.0:
+            raise ValueError("stationarity_atol must be finite and non-negative")
         if not np.isfinite(self.rtol) or self.rtol <= 0.0:
             raise ValueError("rtol must be finite and positive")
         if not np.isfinite(self.atol) or self.atol < 0.0:
@@ -101,15 +112,21 @@ class PolishLinearConfig:
 
 
 class PolishLinearReport(NamedTuple):
-    """Finite unpreconditioned residual certificate for a tangent/adjoint solve.
+    """Stationarity and finite true-linear-residual certificates.
 
     ``converged`` requires finite operands, solution, norms and tolerance, with
     ``residual_norm <= tolerance``; an internal Krylov success flag is insufficient.
-    
+
 
     Recomputed from the returned iterate rather than taken from the Krylov
     solver's internal estimate, so a restarted GMRES cannot report success on
     a stale recurrence.
+
+    Public tangent/adjoint ``converged`` requires both ``stationarity_converged``
+    and ``linear_converged``. The latter certifies a finite unpreconditioned
+    residual within ``tolerance``. A skipped Krylov solve has zero iterations,
+    NaN linear norms and ``linear_converged=False``. Stationarity uses the
+    primal scaling and its own reported norm and tolerance.
     """
 
     #: ``||b - A x||`` of the returned solution, a scalar array.
@@ -124,6 +141,10 @@ class PolishLinearReport(NamedTuple):
     #: flag plays no part.  The returned solution is filled with NaN wherever
     #: this is false.
     converged: jax.Array
+    linear_converged: jax.Array | bool = False
+    stationarity_norm: jax.Array | float = float("nan")
+    stationarity_tolerance: jax.Array | float = float("nan")
+    stationarity_converged: jax.Array | bool = False
 
 
 class PolishTangentResult(NamedTuple):
@@ -203,6 +224,7 @@ def _linear_report(operator, rhs, solution, config: PolishLinearConfig):
         tolerance=tolerance,
         iterations=solution.iterations,
         converged=converged,
+        linear_converged=converged,
     )
 
 
@@ -252,6 +274,68 @@ def _solve_linear(operator, rhs, preconditioner, config, solve_kind):
     )
     report = _linear_report(operator, rhs, solution, config)
     return _checked_solution(solution.x, report, config, solve_kind), report
+
+
+def _stationarity_certificate(gradient, context, config):
+    """Match the primal coordinates c=D*y and residual r/a without another JVP."""
+    scale = jnp.asarray(context.residual_scale)
+    reference = jnp.asarray(context.stationarity_reference)
+    diagonal = jnp.asarray(context.variable_scale)
+    if scale.ndim or reference.ndim:
+        raise ValueError("polish residual scale and stationarity reference must be scalars")
+    if diagonal.shape != gradient.shape or context.correction.shape != gradient.shape:
+        raise ValueError("polish stationarity and coordinate scales must match correction shape")
+    norm = jnp.linalg.norm(diagonal * gradient / scale / scale)
+    tolerance = jnp.maximum(
+        config.stationarity_atol,
+        config.stationarity_rtol * jnp.maximum(reference, 1.0),
+    )
+    finite = (
+        jnp.all(jnp.isfinite(gradient))
+        & jnp.all(jnp.isfinite(context.correction))
+        & jnp.all(jnp.isfinite(diagonal) & (diagonal > 0.0))
+        & jnp.isfinite(scale) & (scale > 0.0)
+        & jnp.isfinite(reference) & (reference >= 0.0)
+        & jnp.isfinite(norm) & jnp.isfinite(tolerance)
+    )
+    return norm, tolerance, finite & (norm <= tolerance)
+
+
+def _solve_stationary_linear(operator, rhs, preconditioner, config, solve_kind, certificate):
+    norm, tolerance, stationary = certificate
+    if not isinstance(stationary, jax.core.Tracer) and not bool(stationary):
+        if config.fail_policy == "raise":
+            raise StrongForceCertificationError(
+                f"{solve_kind} requires a stationary polish correction: "
+                f"scaled gradient {float(norm):.3e}, tolerance {float(tolerance):.3e}",
+                hint="refine the nonlinear polish for the current native inputs",
+                stationarity_norm=float(norm),
+                stationarity_tolerance=float(tolerance),
+            )
+    value, linear = jax.lax.cond(
+        stationary,
+        lambda _: _solve_linear(operator, rhs, preconditioner, config, solve_kind),
+        lambda _: (
+            jnp.full_like(rhs, jnp.nan),
+            PolishLinearReport(jnp.asarray(jnp.nan, rhs.real.dtype),
+                               jnp.asarray(jnp.nan, rhs.real.dtype),
+                               jnp.asarray(0, jnp.int32), jnp.asarray(False)),
+        ),
+        operand=None,
+    )
+    report = linear._replace(
+        converged=stationary & linear.converged,
+        stationarity_norm=norm, stationarity_tolerance=tolerance,
+        stationarity_converged=stationary,
+    )
+    return _checked_solution(value, report, config, solve_kind), report
+
+
+def _certified_tangent(value, report):
+    return jax.tree.map(
+        lambda leaf: jnp.where(report.converged, leaf, jnp.full_like(leaf, jnp.nan)),
+        value,
+    )
 
 
 def _collocation_corrected_state(
@@ -355,7 +439,7 @@ def collocation_polish_tangent(
     stationarity = lambda value: _collocation_stationarity(  # noqa: E731
         value, runtime.native, runtime, chart
     )
-    _, operator = jax.linearize(stationarity, correction)
+    gradient, operator = jax.linearize(stationarity, correction)
     _, parameter_direction = jax.jvp(
         lambda native: _collocation_stationarity(
             correction, native, runtime, chart
@@ -364,12 +448,13 @@ def collocation_polish_tangent(
         (native_tangent,),
     )
     diagonal_inverse = jnp.asarray(context.variable_scale) ** 2
-    response, report = _solve_linear(
+    response, report = _solve_stationary_linear(
         operator,
         -parameter_direction,
         lambda rhs: diagonal_inverse * rhs,
         config,
         "least-squares tangent",
+        _stationarity_certificate(gradient, context, config),
     )
     _, correction_tangent = jax.jvp(
         lambda value: _collocation_corrected_state(
@@ -379,7 +464,8 @@ def collocation_polish_tangent(
         (response,),
     )
     return PolishTangentResult(
-        native_tangent=jax.tree.map(jnp.add, native_tangent, correction_tangent),
+        native_tangent=_certified_tangent(
+            jax.tree.map(jnp.add, native_tangent, correction_tangent), report),
         correction_tangent=response,
         report=report,
     )
@@ -448,7 +534,7 @@ def collocation_polish_adjoint(
     stationarity = lambda value: _collocation_stationarity(  # noqa: E731
         value, runtime.native, runtime, chart
     )
-    _, stationarity_pullback = jax.vjp(stationarity, correction)
+    gradient, stationarity_pullback = jax.vjp(stationarity, correction)
     transpose_operator = lambda value: stationarity_pullback(value)[0]  # noqa: E731
     _, correction_pullback = jax.vjp(
         lambda value: _collocation_corrected_state(
@@ -458,12 +544,13 @@ def collocation_polish_adjoint(
     )
     correction_cotangent = correction_pullback(polished_cotangent)[0]
     diagonal_inverse = jnp.asarray(context.variable_scale) ** 2
-    equation_adjoint, report = _solve_linear(
+    equation_adjoint, report = _solve_stationary_linear(
         transpose_operator,
         correction_cotangent,
         lambda rhs: diagonal_inverse * rhs,
         config,
         "least-squares adjoint",
+        _stationarity_certificate(gradient, context, config),
     )
     _, stationarity_native_pullback = jax.vjp(
         lambda native: _collocation_stationarity(
@@ -482,19 +569,20 @@ def collocation_polish_adjoint(
     native_cotangent = jax.tree.map(
         jnp.subtract, direct_cotangent, force_cotangent
     )
-    return PolishAdjointResult(native_cotangent, equation_adjoint, report)
+    return PolishAdjointResult(
+        _certified_tangent(native_cotangent, report), equation_adjoint, report)
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(3, 4, 5))
 def _implicit_collocation_leaves(
     native_leaves: tuple[jax.Array, ...],
     correction: jax.Array,
-    variable_scale: jax.Array,
+    scales: tuple[jax.Array, ...],
     runtime: StrongRootRuntime,
     chart: StrongPhysicalChart,
     config: PolishLinearConfig,
 ) -> tuple[jax.Array, ...]:
-    del variable_scale, config
+    del scales, config
     native = jax.tree.unflatten(jax.tree.structure(runtime.native), native_leaves)
     correction = jax.lax.stop_gradient(jnp.asarray(correction))
     return tuple(
@@ -505,17 +593,17 @@ def _implicit_collocation_leaves(
 
 
 def _implicit_collocation_leaves_fwd(
-    native_leaves, correction, variable_scale, runtime, chart, config
+    native_leaves, correction, scales, runtime, chart, config
 ):
     output = _implicit_collocation_leaves(
         native_leaves,
         correction,
-        variable_scale,
+        scales,
         runtime,
         chart,
         config,
     )
-    return output, (native_leaves, correction, variable_scale)
+    return output, (native_leaves, correction, scales)
 
 
 def _implicit_collocation_leaves_bwd(
@@ -525,7 +613,7 @@ def _implicit_collocation_leaves_bwd(
     saved,
     output_cotangent_leaves,
 ):
-    native_leaves, correction, variable_scale = saved
+    native_leaves, correction, scales = saved
     # The frozen discretization may be reused, but the adjoint must linearize
     # at the native inputs of this forward call, not the runtime's old state.
     native = jax.tree.unflatten(jax.tree.structure(runtime.native), native_leaves)
@@ -534,14 +622,14 @@ def _implicit_collocation_leaves_bwd(
         jax.tree.structure(runtime.native), output_cotangent_leaves
     )
     result = collocation_polish_adjoint(
-        PolishContext(runtime, chart, correction, variable_scale),
+        PolishContext(runtime, chart, correction, *scales),
         output_cotangent,
         config=config,
     )
     return (
         tuple(jax.tree.leaves(result.native_cotangent)),
         jnp.zeros_like(correction),
-        jnp.zeros_like(variable_scale),
+        jax.tree.map(jnp.zeros_like, scales),
     )
 
 
@@ -556,12 +644,13 @@ def implicit_collocation_polished_state(
     context: PolishContext,
     config: PolishLinearConfig = PolishLinearConfig(),
 ) -> HighOrderEquilibriumState:
-    """Return a certified polished state with a stationarity-equation VJP.
+    """Attach a stationarity-checked VJP to a supplied polish correction.
 
     The primal correction comes from :func:`polish_collocation_least_squares`.
     Reverse mode solves the exact transposed least-squares stationarity
     equation once; it never differentiates through the nonlinear iterations.
-    Use :func:`collocation_polish_tangent` for forward sensitivities.
+    The forward evaluates the supplied correction; the pullback checks its
+    stationarity for the current native inputs.  Use :func:`collocation_polish_tangent` for forward sensitivities.
 
     The primal value is simply ``native`` plus the frozen correction lifted
     into spline coefficients; the correction is held under
@@ -601,7 +690,8 @@ def implicit_collocation_polished_state(
     polished_leaves = _implicit_collocation_leaves(
         leaves,
         context.correction,
-        context.variable_scale,
+        (context.variable_scale, jnp.asarray(context.residual_scale),
+         jnp.asarray(context.stationarity_reference)),
         context.runtime,
         context.chart,
         config,
