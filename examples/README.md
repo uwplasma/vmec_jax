@@ -59,7 +59,27 @@ All runnable examples live under this single `examples/` tree. Examples marked
   - `vmex_fixed_free_boundary_comparison.py` *(preview)* — compare a parent
     free boundary with an `s=0.5` fixed-boundary solve and its exterior field.
 - `optimization/`: compact QA/QH/QP/QI scripts using `(function, target,
-  weight)` terms with SciPy least-squares, BFGS, or L-BFGS-B.
+  weight)` terms with SciPy least-squares, BFGS, or L-BFGS-B. The canonical
+  `QA_optimization.py` keeps the explicit residual/Jacobian workflow. Its
+  scalar companion forms the identical `0.5 * r.T @ r` objective before
+  implicit differentiation, so L-BFGS-B needs one equilibrium adjoint per
+  gradient rather than the complete residual Jacobian. The same comparison is
+  available for all four symmetry objectives:
+
+  | Family | Vacuum scalar example | Finite-beta scalar example |
+  | --- | --- | --- |
+  | QA | `QA_optimization_scalar.py` | `QA_optimization_finite_beta_scalar.py` |
+  | QH | `QH_optimization_scalar.py` | `QH_optimization_finite_beta_scalar.py` |
+  | QP | `QP_optimization_scalar.py` | `QP_optimization_finite_beta_scalar.py` |
+  | QI | `QI_optimization_scalar.py` | `QI_optimization_finite_beta_scalar.py` |
+
+  The finite-beta examples calibrate a prescribed linear pressure profile and
+  include radially weighted Mercier and resistive-interchange terms. The shared
+  `_scalar_driver.py` contains only the optimizer wiring; each runnable file
+  keeps its physical targets, resolution, save names, and validation visible.
+  The scalar lane trades objective progress per evaluation (roughly 3x higher
+  objective at a matched budget on the QA workflow) for a cheaper cold start and
+  lower peak memory; `QA_optimization.py` remains the default.
   `single_stage_optimization.py` *(preview)* varies a prescribed boundary and
   coil Fourier coefficients; it does not call a free-boundary solve.
   `QA_optimization_bootstrap.py`, `QH_optimization_bootstrap.py` and

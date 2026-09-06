@@ -306,16 +306,41 @@ def test_global_optimization_example_exposes_optimizer_contract():
     assert "ess_alpha=ESS_ALPHA" in text
 
 
-def test_qa_optimization_uses_fast_scalar_adjoint_lane():
-    """The canonical QA example must not rebuild a pointwise Jacobian."""
-
+def test_qa_optimization_keeps_explicit_least_squares_lane():
+    """The canonical QA example keeps its residual/Jacobian tutorial."""
     text = (EXAMPLES / "optimization" / "QA_optimization.py").read_text()
-    assert "VmecProblem.from_loss" in text
-    assert "residuals_from_tuples" in text
-    assert "compile_value_and_gradient" in text
-    assert "compile_residual_and_jacobian" not in text
-    assert "minimize(" in text
+    assert "VmecProblem.from_tuples" in text
+    assert "compile_residual_and_jacobian" in text
+    assert "least_squares(" in text
+    assert "VmecProblem.from_loss" not in text
     assert "ess_alpha=ESS_ALPHA" in text
+
+
+@pytest.mark.parametrize("case", ["QA", "QH", "QP", "QI"])
+@pytest.mark.parametrize("finite_beta", [False, True])
+def test_scalar_optimization_examples_expose_one_adjoint_lane(case, finite_beta):
+    """All eight scalar examples share wiring but keep physics visible."""
+    suffix = "_finite_beta_scalar" if finite_beta else "_scalar"
+    text = (EXAMPLES / "optimization" / f"{case}_optimization{suffix}.py").read_text()
+    assert "from _scalar_driver import run_scalar_stage" in text
+    assert "objective_terms" in text
+    assert "run_scalar_stage(" in text
+    assert "POLISH_FORCE_BALANCE = False" in text
+    assert f"input.{case}_" in text and f"wout_{case}_" in text
+    if finite_beta:
+        assert "TARGET_BETA" in text
+        assert "opt.volume_average_beta" in text
+        assert "opt.mercier_stability_residual" in text
+        assert "opt.glasser_stability_residual" in text
+    else:
+        assert "TARGET_BETA" not in text
+
+    helper = (EXAMPLES / "optimization" / "_scalar_driver.py").read_text()
+    assert "VmecProblem.from_loss" in helper
+    assert "residuals_from_tuples" in helper
+    assert "0.5 * jnp.vdot(rows, rows)" in helper
+    assert "compile_value_and_gradient" in helper
+    assert 'method="L-BFGS-B"' in helper
 
 
 @pytest.mark.parametrize("case", ["QA", "QH", "QP", "QI"])
@@ -513,6 +538,32 @@ def test_qs_optimization_examples(case, tmp_path):
     assert (tmp_path / f"{case}_optimized_summary.png").exists()
     match = re.search(r"\[final\] QS total = ([0-9.eE+-]+)", out)
     assert match is not None and np.isfinite(float(match.group(1)))
+
+
+def test_qa_scalar_optimization_example(tmp_path):
+    """The vacuum scalar driver descends and writes distinct outputs."""
+    script = EXAMPLES / "optimization" / "QA_optimization_scalar.py"
+    out = _run_example(script, tmp_path)
+    match = re.search(r"scalar cost: ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert match is not None and float(match.group(2)) < float(match.group(1))
+    assert "[final] QS total" in out
+    assert (tmp_path / "input.QA_scalar_optimized").exists()
+    assert (tmp_path / "wout_QA_scalar_optimized.nc").exists()
+    assert (tmp_path / "QA_scalar_optimized_summary.png").exists()
+
+
+@pytest.mark.full
+def test_qa_finite_beta_scalar_optimization_example(tmp_path):
+    """The finite-beta scalar driver includes pressure and stability rows."""
+    script = EXAMPLES / "optimization" / "QA_optimization_finite_beta_scalar.py"
+    out = _run_example(script, tmp_path)
+    match = re.search(r"scalar cost: ([0-9.eE+-]+) -> ([0-9.eE+-]+)", out)
+    assert match is not None and float(match.group(2)) < float(match.group(1))
+    beta = re.search(r"\[final\].*beta = ([0-9.]+)%", out)
+    assert beta is not None and 0.5 < float(beta.group(1)) < 2.0
+    assert (tmp_path / "input.QA_finite_beta_scalar_optimized").exists()
+    assert (tmp_path / "wout_QA_finite_beta_scalar_optimized.nc").exists()
+    assert (tmp_path / "QA_finite_beta_scalar_optimized_summary.png").exists()
 
 
 @pytest.mark.full  # nightly: shared Boozer + bounce-action Jacobian is cold-compile heavy
