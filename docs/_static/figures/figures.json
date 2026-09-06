@@ -1,0 +1,329 @@
+{
+  "schema": "vmex.figure-provenance/1",
+  "note": "Provenance for every figure under docs/_static/figures. One row per committed image. `sha256`, `bytes` and `used_in` are recomputed by `python tools/update_figure_manifest.py`; everything else is authored. `tests/test_figure_provenance.py` fails when a figure changes without its row, when a row names a generator or input that does not exist, or when a figure is added or removed without updating this file. Two fields are deliberately honest. `reproducible` says what it takes to rebuild the figure: `command` means the listed command rebuilds it from the repository alone, `manual` means a script produces the pixels but a rename, crop or format conversion is done by hand, and `external-data` means it also needs data that is not in the tree. `bytes_verified` says whether the committed bytes were actually re-derived and compared, which is a stronger claim: a `command` figure with `bytes_verified` false can be rebuilt, but its committed pixels predate the current renderer.",
+  "figures": [
+    {
+      "path": "docs/_static/figures/ess_x_scale.webp",
+      "sha256": "eb61149f25f68af8ec105b14ba2e54d93c75fbf6fd50400384ef04a39316b130",
+      "bytes": 18448,
+      "generator": "docs/_static/figures/sources/make_optimization_docs_figures.py",
+      "command": "python docs/_static/figures/sources/make_optimization_docs_figures.py",
+      "inputs": [],
+      "record": null,
+      "generated": "2026-09-03",
+      "hardware": null,
+      "reproducible": "command",
+      "bytes_verified": true,
+      "used_in": [],
+      "note": "Closed-form plot of the exponential spectral scaling exp(-alpha*max(|m|,|n|)); it solves nothing and reads nothing, so there is no hardware to record. No docs page currently embeds it \u2014 it is kept as a generated asset for the objectives pages, and the empty used_in below records that honestly."
+    },
+    {
+      "path": "docs/_static/figures/gradient_stack_speedup.webp",
+      "sha256": "ea97c7e489ec4a953d1715baa96ec8438003d8cc00e8524338d6ce1f4e207caa",
+      "bytes": 20594,
+      "generator": "docs/_static/figures/sources/make_optimization_docs_figures.py",
+      "command": "python docs/_static/figures/sources/make_optimization_docs_figures.py",
+      "inputs": [],
+      "record": null,
+      "generated": "2026-09-03",
+      "hardware": "Apple Silicon CPU",
+      "reproducible": "command",
+      "bytes_verified": true,
+      "used_in": [
+        "docs/explanation/adjoint-gradients.md"
+      ],
+      "note": "The bar heights are measurements from 2026-07-12 typed into the generator, not read from a committed artifact; re-running redraws the same typed numbers. Treat it as an illustration of the gradient-stack argument, not as a citable timing record. The `generated` date is the render, not the measurement."
+    },
+    {
+      "path": "docs/_static/figures/mirror_fixed_boundary_3d.webp",
+      "sha256": "5b7c67b526871cae42aef941f573a7ac3b07f1fb06c41cc522f99d22f0bf1981",
+      "bytes": 69684,
+      "generator": "examples/mirror/mirror_fixed_boundary_nonaxisymmetric.py",
+      "command": "python examples/mirror/mirror_fixed_boundary_nonaxisymmetric.py",
+      "inputs": [],
+      "record": "benchmarks/mirror_fixed_boundary.json",
+      "generated": "2026-07-18",
+      "hardware": null,
+      "reproducible": "manual",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md",
+        "docs/explanation/mirror-geometry.rst"
+      ],
+      "note": "Geometry is built from constants inside the example, not from a deck. vmex/mirror/output.py writes results/<run>/mirror_fixed_boundary_3d.png; the committed WebP is a hand conversion of that PNG."
+    },
+    {
+      "path": "docs/_static/figures/mirror_free_boundary_beta_scan.webp",
+      "sha256": "6baf75ced387443ded2d1e79097231c556e78628e4593ea76385dd68ae55debf",
+      "bytes": 55428,
+      "generator": "examples/mirror/mirror_free_boundary_beta_scan.py",
+      "command": "python examples/mirror/mirror_free_boundary_beta_scan.py",
+      "inputs": [],
+      "record": "benchmarks/mirror_free_boundary_axisymmetric.json",
+      "generated": "2026-08-11",
+      "hardware": null,
+      "reproducible": "manual",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "ESSOS two-loop coil set built from constants inside the example. vmex/mirror/output.py writes the panel as PNG; the committed WebP is a hand conversion."
+    },
+    {
+      "path": "docs/_static/figures/qi_mirror_hybrid.webp",
+      "sha256": "4a578e5c2426475ec1ee4cf1b132b5ed7a06b5094f0b497edda11bd38d76c077",
+      "bytes": 119474,
+      "generator": "examples/mirror/qi_mirror_hybrid_fourier_vs_bspline.py",
+      "command": "python examples/mirror/qi_mirror_hybrid_fourier_vs_bspline.py",
+      "inputs": [
+        "examples/data/input.nfp2_QI"
+      ],
+      "record": "benchmarks/mirror_hybrid_fixed_boundary.json",
+      "generated": "2026-07-19",
+      "hardware": null,
+      "reproducible": "command",
+      "bytes_verified": false,
+      "used_in": [
+        "docs/explanation/mirror-geometry.rst"
+      ],
+      "note": "The example writes this path directly unless VMEX_EXAMPLES_CI=1 redirects it to a results directory."
+    },
+    {
+      "path": "docs/_static/figures/readme_convergence.webp",
+      "sha256": "e3d16a8a0b411842746d05e735627cd6ccb193ee65f84e0b587d8c29162a2663",
+      "bytes": 40820,
+      "generator": "benchmarks/make_readme_figures.py",
+      "command": "python benchmarks/make_readme_figures.py --only convergence",
+      "inputs": [
+        "benchmarks/convergence_nfp4_ns51.json",
+        "examples/data/input.nfp4_QH_warm_start"
+      ],
+      "record": "benchmarks/convergence_nfp4_ns51.json",
+      "generated": "2026-09-03",
+      "hardware": null,
+      "reproducible": "command",
+      "bytes_verified": true,
+      "note": "Plots the cached three-code trace, which dates from 2026-07-10; the `generated` date is the render. On a cache miss the generator re-solves and shells out to VMEC2000 and VMEC++, discovered locally or via VMEX_XVMEC2000 / VMEX_VMECPP_PY. Re-rendered in 2026-09 so the committed bytes match what the command produces.",
+      "used_in": [
+        "README.md",
+        "docs/explanation/validation.md",
+        "docs/reference/performance.rst"
+      ]
+    },
+    {
+      "path": "docs/_static/figures/readme_diagnostics_summary.webp",
+      "sha256": "7e87a2dc037da1e6152900ea8b68f86333b8500ab414c9be6372ac2089cc7dc7",
+      "bytes": 414012,
+      "generator": "docs/_static/figures/sources/make_readme_diagnostics_figures.py",
+      "command": "python docs/_static/figures/sources/make_readme_diagnostics_figures.py",
+      "inputs": [
+        "examples/data/input.nfp4_QI_finite_beta"
+      ],
+      "record": "docs/_static/figures/readme_diagnostics.json",
+      "generated": "2026-09-03",
+      "hardware": "Apple M3 Max (arm64), macOS 23.4, CPU",
+      "reproducible": "command",
+      "bytes_verified": true,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "Regenerated from a bundled deck in 2026-09; the figure it replaced had no generator and no recorded input. The record file carries the deck hash, the solved scalars the README quotes, and the run's commit and versions."
+    },
+    {
+      "path": "docs/_static/figures/readme_equilibrium_showcase.webp",
+      "sha256": "b9a8966bd5784bbe8f4bf9ce6cba29c2ea3d829db5793503c010158937c83fe9",
+      "bytes": 93274,
+      "generator": "benchmarks/make_readme_figures.py",
+      "command": "python benchmarks/make_readme_figures.py --only showcase",
+      "inputs": [
+        "examples/data/input.nfp4_QH_warm_start"
+      ],
+      "record": null,
+      "generated": "2026-07-09",
+      "hardware": null,
+      "reproducible": "command",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "Solves the deck in process and runs the Boozer transform on a temporary wout, so the pixels track the solver version rather than a committed artifact. Not re-rendered here, so its committed bytes predate the lossless-WebP change to the generator."
+    },
+    {
+      "path": "docs/_static/figures/readme_essos_beta_scan.webp",
+      "sha256": "192d95eab9d9fe87c1e6d66567913bea8a1b12f7b22d7777a36ce680df29253c",
+      "bytes": 27106,
+      "generator": "examples/free_boundary_essos_coils.py",
+      "command": "python examples/free_boundary_essos_coils.py",
+      "inputs": [
+        "examples/data/ESSOS_biot_savart_LandremanPaulQA.json",
+        "examples/data/input.LandremanPaul2021_QA_lowres"
+      ],
+      "record": null,
+      "generated": "2026-07-12",
+      "hardware": null,
+      "reproducible": "manual",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "The example writes output_free_boundary_essos_coils/essos_beta_scan.png; the committed file is that PNG renamed and converted by hand. Needs the ESSOS optional dependency."
+    },
+    {
+      "path": "docs/_static/figures/readme_extender_exterior_islands.webp",
+      "sha256": "053c039eb9a6ed476fc1c081c8a29864a85d1c485c2aa2f546b5150fe19fa7a8",
+      "bytes": 116666,
+      "generator": "examples/vmex_fieldline_tracing_finite_beta.py",
+      "command": "python examples/vmex_fieldline_tracing_finite_beta.py",
+      "inputs": [
+        "examples/data/input.LandremanPaul2021_QA_beta0p5_bootstrap",
+        "examples/data/ESSOS_biot_savart_LandremanPaulQA_beta0p5_bootstrap.json"
+      ],
+      "record": null,
+      "generated": "2026-09-02",
+      "hardware": null,
+      "reproducible": "manual",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "The example writes a three-panel PNG; the committed file is a hand crop of its phi=0 Poincare panel pair. Needs the ESSOS optional dependency."
+    },
+    {
+      "path": "docs/_static/figures/readme_optimization.webp",
+      "sha256": "983b489832720171162462cf5ce314f4b0d8520cd972b8755d2e39b65d608056",
+      "bytes": 297724,
+      "generator": "examples/plot_optimized_families.py",
+      "command": "python examples/plot_optimized_families.py",
+      "inputs": [],
+      "record": null,
+      "generated": "2026-07-11",
+      "hardware": null,
+      "reproducible": "external-data",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "Reads input.QA_optimized / input.QH_optimized / input.QP_optimized from the working directory. Those decks are the output of examples/optimization/{QA,QH,QP}_optimization.py and are not committed, so the figure cannot be regenerated from a clean checkout alone."
+    },
+    {
+      "path": "docs/_static/figures/readme_polish_summary.webp",
+      "sha256": "cb73631852f030c066e1243f6dc61abf9fe875289c644dd6276d13f0cc8c1630",
+      "bytes": 132596,
+      "generator": "benchmarks/make_strong_force_comparison.py",
+      "command": "python benchmarks/make_strong_force_comparison.py --summary-before-cert ... --summary-after-cert ... --summary-wout-before ... --summary-wout-after ...",
+      "inputs": [
+        "benchmarks/strong_force_comparison_m4.json"
+      ],
+      "record": "benchmarks/strong_force_comparison_m4.json",
+      "generated": "2026-09-02",
+      "hardware": "Apple M4",
+      "reproducible": "external-data",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "The four certificate and wout paths are supplied on the command line and are not committed. The record file carries this figure's sha256 and the before/after independent L2 the panel plots, and tests/test_performance_docs.py already guards both."
+    },
+    {
+      "path": "docs/_static/figures/readme_precond.webp",
+      "sha256": "cf700ce61da2f5eb92d7e5e73e7cabddb5051d97ff29701fee80a03efbc58843",
+      "bytes": 16768,
+      "generator": "benchmarks/make_readme_figures.py",
+      "command": "python benchmarks/preconditioner_2d_stiff.py && python benchmarks/make_readme_figures.py --only precond",
+      "inputs": [
+        "benchmarks/preconditioner_2d_stiff_cases.json",
+        "examples/data/input.circular_tokamak_aspect_100",
+        "examples/data/input.nfp4_QH_finite_beta"
+      ],
+      "record": "benchmarks/preconditioner_2d_stiff_cases.json",
+      "generated": "2026-09-03",
+      "hardware": "Apple M3 Max (arm64), macOS 23.4, CPU",
+      "reproducible": "command",
+      "bytes_verified": true,
+      "used_in": [
+        "docs/reference/performance.rst"
+      ],
+      "note": "Until 2026-09 the bar heights were three iteration pairs typed into the generator, sourced only from a commit message. They are now read from the record, which a committed driver writes."
+    },
+    {
+      "path": "docs/_static/figures/readme_qi.webp",
+      "sha256": "493a17ffc3fe32dfa1a8eadf01b245f9605023f400a86d0fc4a0328d6ce55079",
+      "bytes": 538774,
+      "generator": "examples/plot_optimized_families.py",
+      "command": "python examples/plot_optimized_families.py",
+      "inputs": [
+        "examples/data/input.nfp1_QI",
+        "examples/data/input.nfp2_QI",
+        "examples/data/input.nfp3_QI_fixed_resolution_final",
+        "examples/data/input.nfp4_QI_finite_beta"
+      ],
+      "record": null,
+      "generated": "2026-07-11",
+      "hardware": null,
+      "reproducible": "command",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "Unlike the sibling optimization figure, every QI deck it draws is bundled, so one command rebuilds it. Not re-rendered here (four solves), so its committed bytes predate the lossless-WebP change to the generator."
+    },
+    {
+      "path": "docs/_static/figures/readme_runtime_compare.webp",
+      "sha256": "45a8bc36b9cd9a79cfdb658545a4cb293ecf285023bb5c88f401e1cf34a1efff",
+      "bytes": 38466,
+      "generator": "benchmarks/make_readme_figures.py",
+      "command": "python benchmarks/make_readme_figures.py --only runtime",
+      "inputs": [
+        "benchmarks/baseline.json",
+        "benchmarks/gpu_baseline.json"
+      ],
+      "record": "benchmarks/baseline.json",
+      "generated": "2026-09-03",
+      "hardware": null,
+      "reproducible": "command",
+      "bytes_verified": true,
+      "used_in": [
+        "README.md",
+        "docs/index.md"
+      ],
+      "note": "Regenerated in 2026-09 from the committed baselines. The previously committed pixels dated from 2026-07-07 and came from a pipeline no longer in the tree; its sidecar readme_runtime_compare.json/.csv were deleted so the figure has one provenance story. Hardware is a property of benchmarks/baseline.json, not of the render."
+    },
+    {
+      "path": "docs/_static/figures/readme_strong_force_comparison.webp",
+      "sha256": "c2b3887070661a750488c2e69a09ec9ee66d86a3aa8d51e1204eec82e5bd98e6",
+      "bytes": 69182,
+      "generator": "benchmarks/make_strong_force_comparison.py",
+      "command": "python benchmarks/make_strong_force_comparison.py",
+      "inputs": [
+        "benchmarks/strong_force_cases_m4.json",
+        "benchmarks/strong_force_comparison_m4.json"
+      ],
+      "record": "benchmarks/strong_force_comparison_m4.json",
+      "generated": "2026-09-02",
+      "hardware": "Apple M4",
+      "reproducible": "command",
+      "bytes_verified": false,
+      "used_in": [
+        "README.md"
+      ],
+      "note": "The renderer refuses to draw a source measured from a dirty tree or a failed external solve. tests/test_performance_docs.py already guards this figure's sha256 and every source hash."
+    },
+    {
+      "path": "docs/_static/figures/stellarator_mirror_hybrid.webp",
+      "sha256": "37f372bb171c8b86ade776dc8352e27c11266a6b3f8ac57aabc238cfbf210a0e",
+      "bytes": 109610,
+      "generator": "examples/mirror/stellarator_mirror_hybrid.py",
+      "command": "python examples/mirror/stellarator_mirror_hybrid.py",
+      "inputs": [],
+      "record": null,
+      "generated": "2026-07-18",
+      "hardware": null,
+      "reproducible": "manual",
+      "bytes_verified": false,
+      "used_in": [
+        "docs/explanation/mirror-geometry.rst"
+      ],
+      "note": "The periodic B-spline racetrack is built from constants inside the example. vmex/mirror/output.py writes PNG; the committed WebP is a hand conversion."
+    }
+  ]
+}

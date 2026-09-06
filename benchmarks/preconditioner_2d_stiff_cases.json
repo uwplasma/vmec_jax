@@ -1,0 +1,76 @@
+{
+  "schema": "vmex.preconditioner-2d-stiff-cases/2",
+  "provenance": {
+    "measurement_commit": "8b1c5ffe67d042da271a2d1b063fdbb39ed2f847",
+    "measurement_dirty": false,
+    "input_data_embedded": false,
+    "schema": 2,
+    "measurement_date": "2026-09-03",
+    "host": "Darwin 23.4.0 (arm64), CPU",
+    "cpu": "Apple M3 Max",
+    "python": "3.11.14",
+    "versions": {
+      "vmex": "0.8.1",
+      "jax": "0.9.2",
+      "jaxlib": "0.9.2",
+      "solvax": "0.20.0"
+    },
+    "prec2d_config": {
+      "threshold": 1e-06,
+      "gmres_restart": 60,
+      "gmres_max_restarts": 3,
+      "gmres_rtol": 0.003
+    },
+    "protocol": "One process per invocation, both paths solved back to back from the same deck and resolution, mode='jit', float64. Iteration counts are deterministic for a given build; the wall times include compilation and are not a speed claim."
+  },
+  "what_is_measured": "Iterations to reach the stated FTOL with the default 1D radial preconditioner versus the opt-in matrix-free 2D block preconditioner (vmex.core.preconditioner_2d). Both paths converge to the same equilibrium; the recorded wb relative difference is the parity witness. The default 1D path is unaffected by the presence of the 2D path.",
+  "generator": "benchmarks/preconditioner_2d_stiff.py",
+  "figure": "docs/_static/figures/readme_precond.webp",
+  "cases": [
+    {
+      "key": "aspect100_ns51",
+      "label": "aspect-100 tokamak, ns=51",
+      "deck": "examples/data/input.circular_tokamak_aspect_100",
+      "ns": 51,
+      "ftol": 1e-11,
+      "iterations_1d": 97,
+      "iterations_2d": 18,
+      "wb_1d": 4999.935321566441,
+      "wb_2d": 4999.935321384274,
+      "wb_relative_difference": 3.643391955609079e-11,
+      "wall_s_1d_including_compile": 3.23,
+      "wall_s_2d_including_compile": 5.22,
+      "in_readme_figure": true
+    },
+    {
+      "key": "aspect100_ns101",
+      "label": "aspect-100 tokamak, ns=101",
+      "deck": "examples/data/input.circular_tokamak_aspect_100",
+      "ns": 101,
+      "ftol": 1e-11,
+      "iterations_1d": 163,
+      "iterations_2d": 15,
+      "wb_1d": 4999.935314856287,
+      "wb_2d": 4999.935314665948,
+      "wb_relative_difference": 3.8068302728134264e-11,
+      "wall_s_1d_including_compile": 2.79,
+      "wall_s_2d_including_compile": 5.38,
+      "in_readme_figure": true
+    },
+    {
+      "key": "nfp4_QH_finite_beta_ns51",
+      "label": "nfp4 QH, finite beta, ns=51",
+      "deck": "examples/data/input.nfp4_QH_finite_beta",
+      "ns": 51,
+      "ftol": 1e-11,
+      "iterations_1d": 1885,
+      "iterations_2d": 246,
+      "wb_1d": 581.1749910515229,
+      "wb_2d": 581.1746611181397,
+      "wb_relative_difference": 5.67700586215456e-07,
+      "wall_s_1d_including_compile": 7.46,
+      "wall_s_2d_including_compile": 9.4,
+      "in_readme_figure": true
+    }
+  ]
+}

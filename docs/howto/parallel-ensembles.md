@@ -2,8 +2,7 @@
 
 `vj.parallel.solve_ensemble` threads independent solves over a
 `ThreadPoolExecutor`; each host solve releases the GIL while XLA executes,
-so the solves overlap for real wall-clock speedup — measured 1.79x at 2
-workers and 3.29x at 8 on a 10-logical-CPU box.
+so the solves overlap for real wall-clock speedup.
 
 ## Run an ensemble
 
@@ -35,16 +34,14 @@ GIL-releasing XLA windows. `tests/test_parallel.py` asserts exactly zero
 state difference (and identical iteration counts) against the serial solve
 on a solovev / circular-tokamak / li383 ensemble and on a `phiedge` scan.
 
-Measured on a balanced `nfp2_QA` `phiedge` scan (`mpol=5, ntor=5, ns=35`,
-8 solves ~0.68 s each), reproduced by `examples/parallel_ensemble_scan.py`,
-on a 10-logical-CPU box (best-of-3):
-
-| workers | wall (s) | speedup | efficiency |
-|---------|----------|---------|------------|
-| serial  | 5.46     | 1.00x   | 100 %      |
-| 2       | 3.05     | 1.79x   | 89 %       |
-| 4       | 2.15     | 2.54x   | 63 %       |
-| 8       | 1.66     | 3.29x   | 41 %       |
+How much wall-clock you get back depends on your host — core count, how
+many of them XLA is already using inside a single solve, and what else is
+running — so this page quotes no speedup table. Measure your own with
+`examples/parallel_ensemble_scan.py`, which runs a balanced `nfp2_QA`
+`phiedge` scan serially and then at 2, 4, and 8 workers and prints the
+wall times. Expect efficiency to fall as workers rise: a single solve
+already uses XLA's internal threading, so workers and intra-solve threads
+compete for the same cores.
 
 ## When it does not help
 

@@ -85,21 +85,13 @@ This matrix was checked on 2026-08-11 against current [STELLOPT/VMEC2000](https:
 | self-consistent bootstrap-current workflows | ✅ | ❌ | ❌ |
 | open mirrors and stellarator–mirror hybrids | ⚠️ validated scopes | ❌ | ❌ |
 
-### Convergence parity and implementation size
+### Convergence parity
 
-On the bundled NFP=4 QH case at `ns=51`, VMEX follows VMEC2000 and VMEC++ through the full force-residual trace (fresh local run: VMEX `d7347c9`, VMEC2000 `512375c`, VMEC++ 0.5.3). Reproduce it with `python benchmarks/make_readme_figures.py --only convergence`; the benchmark discovers local solver installations or accepts `VMEX_XVMEC2000` and `VMEX_VMECPP_PY`.
+On the bundled NFP=4 QH case at `ns=51`, VMEX follows VMEC2000 and VMEC++ through the full force-residual trace. Reproduce it with `python benchmarks/make_readme_figures.py --only convergence`; the benchmark discovers local solver installations or accepts `VMEX_XVMEC2000` and `VMEX_VMECPP_PY`, and caches the traces in `benchmarks/convergence_nfp4_ns51.json`.
 
 ![VMEX, VMEC2000, and VMEC++ convergence trace](docs/_static/figures/readme_convergence.webp)
 
-The following `cloc 2.11` snapshot counts implementation code and comments, excluding tests, generated code, and third-party sources. VMEX counts `vmex/core` (the toroidal solver); VMEC2000 counts `VMEC2000/Sources` but not shared STELLOPT libraries; VMEC++ counts `src/vmecpp` C++/headers/Python. These scopes make the comparison reproducible, not a claim of identical feature breadth.
-
-| Solver and revision | Files | Code lines | Comment lines |
-|---|---:|---:|---:|
-| VMEX `d7347c9` | 46 | 21,189 | 7,857 |
-| VMEC2000 `aeb0261` | 115 | 24,164 | 8,451 |
-| VMEC++ `d83035b` | 146 | 38,338 | 9,661 |
-
-VMEX reduces duplication by expressing spectral operators as vectorized JAX array programs and using the same equations for CPU, accelerators, and automatic differentiation. It also deliberately omits some legacy modes, so the smaller codebase reflects both architecture and narrower compatibility surface.
+VMEX reduces duplication by expressing spectral operators as vectorized JAX array programs and using the same equations for CPU, accelerators, and automatic differentiation. It also deliberately omits some legacy modes, so it carries both a different architecture and a narrower compatibility surface than the Fortran and C++ implementations.
 
 ## Performance and parallelism
 
@@ -514,18 +506,23 @@ $O(1)$ regardless of solve quality. The
 [plotting guide](https://vmex.readthedocs.io/en/latest/howto/plot-diagnostics.html)
 defines every panel; `--booz` additionally saves a reusable `boozmn_*.nc`.
 
-This finite-pressure NFP=3 QI example reaches $\langle\beta\rangle=2.38\%$.
+The panel below is the bundled finite-pressure NFP=4 QI deck
+`examples/data/input.nfp4_QI_finite_beta` at `ns=51`, which reaches
+$\langle\beta\rangle=2.53\%$. Regenerate it with
+`python docs/_static/figures/sources/make_readme_diagnostics_figures.py`; the
+deck hash, the solved scalars, and the run's commit and versions are recorded
+in `docs/_static/figures/readme_diagnostics.json`.
 
-![Finite-pressure NFP=3 QI diagnostics](docs/_static/figures/readme_diagnostics_summary.webp)
+![Finite-pressure NFP=4 QI diagnostics](docs/_static/figures/readme_diagnostics_summary.webp)
 
-The vacuum QA example has `pres=0` and `DWell=0` exactly: VMEX adds no pressure floor. `DMerc` can retain shear, current, and geodesic terms; for a current-free vacuum it reduces to the shear term and $D_R=0$, so these curves are not a finite-beta pressure margin.
+On a vacuum case the same panel reads differently, and the difference is
+physics rather than a plotting artifact: with `pres=0` VMEX adds no pressure
+floor, so `DWell` is exactly zero. `DMerc` can retain shear, current, and
+geodesic terms; for a current-free vacuum it reduces to the shear term and
+$D_R=0$, so a vacuum Mercier curve is not a finite-beta pressure margin.
 
-![Vacuum QA diagnostics](docs/_static/figures/readme_diagnostics_qa_vacuum.webp)
-
-`QA_optimization_bootstrap.py`, `QH_optimization_bootstrap.py` and `QI_optimization_bootstrap.py` first fit a bootstrap-consistent seed, then optimize the boundary and a stage-refined current spline together against Redl, Mercier, and resistive-interchange targets. The QI variant uses `helicity_n=0`, since a quasi-isodynamic field carries no helical symmetry for the Redl isomorphism to shift; Redl is a fit to quasisymmetric calculations, so there it is an analytic estimate rather than a converged kinetic answer. Their controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl); published-equilibrium and SFINCS comparisons live in `benchmarks/`.
-Each script also writes a direct Redl-versus-equilibrium bootstrap-current overlay. In the vacuum QA example, setting `TRIAL_BETA` enables differentiable frozen-geometry pressure proxies for `DMerc` and `DR`; a finite-pressure re-solve remains the stability certificate.
-
-![Self-consistent QA and QH bootstrap current](docs/_static/figures/readme_bootstrap.webp)
+`QA_optimization_bootstrap.py`, `QH_optimization_bootstrap.py` and `QI_optimization_bootstrap.py` first fit a bootstrap-consistent seed, then optimize the boundary and a stage-refined current spline together against Redl, Mercier, and resistive-interchange targets. The QI variant uses `helicity_n=0`, since a quasi-isodynamic field carries no helical symmetry for the Redl isomorphism to shift; Redl is a fit to quasisymmetric calculations, so there it is an analytic estimate rather than a converged kinetic answer. Their controls are explained in the [objective reference](https://vmex.readthedocs.io/en/latest/reference/objectives.html#bootstrap-current-redl). `benchmarks/QA_bootstrap_selfconsistent.py` and `benchmarks/QH_bootstrap_selfconsistent.py` reproduce arXiv:2205.02914 against that paper's published equilibrium; the QA script also compares against the paper's stored SFINCS drift-kinetic curve (the QH SFINCS points are published only as a figure, so no QH comparison exists). Both need the paper's Zenodo archive on disk (`VMEX_ZENODO_2205_02914`).
+Each script also writes a direct Redl-versus-equilibrium bootstrap-current overlay (`bootstrap_comparison.png`, next to the run's outputs). In the vacuum QA example, setting `TRIAL_BETA` enables differentiable frozen-geometry pressure proxies for `DMerc` and `DR`; a finite-pressure re-solve remains the stability certificate.
 
 ## Documentation and development
 

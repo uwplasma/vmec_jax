@@ -3,11 +3,21 @@
   "schema": 1,
   "measurement_commit": "a324f503670926c9031b9261fbf085d875c2dd03",
   "measurement_date": "2026-07-09",
-  "hardware": "2x NVIDIA RTX A4000 16GB, host pop-os (office workstation), Python 3.10",
-  "jax_version": "0.6.2 (CUDA 12 plugin)",
-  "jaxlib_version": "not recorded",
+  "measurement_dirty": null,
   "input_data_embedded": false,
-  "limitation": "Historical artifact: the commit is the one that committed the file, on the day named in meta.date; the measuring checkout, jaxlib version, CUDA driver, and CPU model were not recorded."
+  "host": "pop-os",
+  "hardware": "2x NVIDIA RTX A4000 16GB (office, pop-os), jax 0.6.2 cuda12, python 3.10",
+  "versions": {
+   "jax": "0.6.2",
+   "jaxlib": null,
+   "python": "3.10",
+   "cuda": "cuda12"
+  },
+  "what_is_measured": "GPU matrix for the baseline decks (cold/warm wall and memory), the batched tridiagonal preconditioner solve across (ns, ncols) in f32 and f64, and a synthetic iteration-throughput scan. The per-block notes in 'meta' define each quantity.",
+  "regenerate": "python benchmarks/run_gpu_matrix.py",
+  "limitation": "Historical artifact: the commit and dirty state of the checkout that produced it were not recorded, and the jax version is known only from the 'hardware' string, so those fields are null or derived rather than measured. Recorded on a different host from every CPU artifact in this directory, so the two are not directly comparable. Historical artifact: the commit is the one that committed the file, on the day named in meta.date; the measuring checkout, jaxlib version, CUDA driver, and CPU model were not recorded.",
+  "jax_version": "0.6.2 (CUDA 12 plugin)",
+  "jaxlib_version": "not recorded"
  },
  "meta": {
   "host": "pop-os",

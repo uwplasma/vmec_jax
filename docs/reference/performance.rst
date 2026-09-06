@@ -305,36 +305,49 @@ Reading the table:
   (zero-crash policy); ``n/a`` marks a configuration the reference does not
   support (``lasym`` free boundary).
 
-Production workflows: CPU vs GPU
---------------------------------
+Production workflows
+--------------------
 
-``benchmarks/profile_production.py`` times the five workflows a design
-loop actually runs, at production resolution. Warm wall-clock, measured
-2026-07-12 (CPU: local Apple-Silicon, idle; GPU: office 2x NVIDIA RTX
-A4000, jax cuda12 — different hosts, so read each column on its own terms):
+``benchmarks/profile_workflows.py`` times the workflows a design loop
+actually runs.  The committed CPU records are ``benchmarks/baselines/m4/``
+— one JSON per workflow and regime, each carrying its commit, dirty flag,
+case sha256, jax version, timings, and peak RSS.  Warm times from that
+record (Apple M4, ``8e6fdff4``, jax 0.9.2, float64):
 
 .. list-table::
    :header-rows: 1
-   :widths: 46 18 18
+   :widths: 12 44 22 22
 
-   * - workflow (warm)
-     - M-series CPU
-     - A4000 GPU
-   * - fixed-boundary solve, ns = 201
-     - **5.5 s** (4.3 ms/iter)
-     - 6.9 s (5.4 ms/iter)
-   * - multigrid ladder 51/101/201
-     - **7.8 s**
-     - 9.3 s
-   * - implicit ``value_and_grad`` (boundary dofs)
-     - **17.3 s**
-     - 27.8 s
-   * - ``least_squares`` opt step (2 nfev)
-     - **88.8 s**
-     - 151 s
+   * - id
+     - workflow (deck)
+     - warm [s]
+     - peak RSS [MiB]
+   * - F1
+     - fixed-boundary single-grid value (``li383_low_res``)
+     - 0.104
+     - 708
+   * - F2
+     - fixed-boundary multigrid value (``cth_like_fixed_bdy``)
+     - 0.262
+     - 1045
+   * - F4
+     - implicit scalar value + gradient (``li383_low_res``)
+     - 11.8
+     - 7997
+   * - F8
+     - least-squares campaign, 5 evaluations (``minimal_seed_nfp2``)
+     - 147
+     - 11379
 
-In short: **a fast desktop CPU beats the A4000 GPU on every production
-workflow, even at ns = 201.** Forward solves are close. Free-boundary GPU
+``python benchmarks/profile_workflows.py --list`` prints the full registry;
+``--all --regimes warm --out benchmarks/baselines/m4/`` regenerates it.
+
+There is no matching GPU record for these workflows, so this page makes no
+workflow-level CPU-versus-GPU claim.  The GPU evidence that does exist is
+``benchmarks/gpu_baseline.json`` (2x NVIDIA RTX A4000, jax 0.6.2 cuda12) and
+covers the baseline decks, the tridiagonal solve, and an iteration-throughput
+scan — read against the CPU baseline table above with the usual caution that
+the two were measured on different hosts.  Free-boundary GPU
 runs use a hybrid decomposition: plasma iterations stay on the accelerator,
 while the small dense NESTOR block runs on CPU with a reused LU factor. The
 gradient pipeline is launch-bound on an accelerator,
@@ -376,7 +389,12 @@ one-time XLA compile dominates the cold result.
 
 Per-iteration algorithmic parity (same step control, preconditioner cadence,
 constants) means the solver does not just reach the same answer — it takes
-the *same number of iterations* as VMEC2000 on the benchmark decks:
+essentially the same number of iterations as VMEC2000 on the benchmark decks.
+The counts below are *observed* on the runs recorded here; what CI enforces
+is looser, a ``+-25%`` window around the golden iteration count
+(``tests/test_parity_breadth.py``), because iteration counts are the one
+parity quantity that legitimately moves with the floating-point path.  Read
+"observed" as "this run matched", not as a guarantee:
 
 .. list-table::
    :header-rows: 1
@@ -389,7 +407,7 @@ the *same number of iterations* as VMEC2000 on the benchmark decks:
    * - solovev
      - 215
      - 215
-     - exact match
+     - observed equal
    * - DSHAPE (multigrid 16/32/64/128)
      - 908
      - 903
@@ -397,15 +415,15 @@ the *same number of iterations* as VMEC2000 on the benchmark decks:
    * - circular_tokamak (multigrid 10/17)
      - 368
      - 368
-     - exact match
+     - observed equal
    * - cth_like_fixed_bdy
      - 434
      - 434
-     - exact match
+     - observed equal
    * - nfp4_QH_warm_start (ns=35)
      - 450
      - 450
-     - exact match
+     - observed equal
    * - LandremanPaul2021_QA_lowres
      - 1000
      - 1000
@@ -581,29 +599,38 @@ finite-β coupling — an opt-in 2D block preconditioner
 (:mod:`vmex.core.preconditioner_2d`) replaces the radial-only approximation
 with a matrix-free Newton step: a Jacobian-vector-product Hessian applied
 through GMRES (SOLVAX's ``block_thomas_truncated`` / Krylov layer). It cuts the
-iteration count 2.5–11x on the stiff cases below, and is a strict add-on — the
+iteration count 5–11x on the stiff cases below, and is a strict add-on — the
 default 1D path stays byte-identical, so parity is untouched.
+
+Every row comes from ``benchmarks/preconditioner_2d_stiff_cases.json``,
+written by ``python benchmarks/preconditioner_2d_stiff.py``; the artifact
+carries the commit, host, and package versions its run used, and
+``tests/test_figure_provenance.py`` fails when this table drifts from it.
 
 .. list-table::
    :header-rows: 1
-   :widths: 40 20 20 20
+   :widths: 34 16 16 16 18
 
    * - stiff case
      - 1D radial
      - 2D block
      - reduction
-   * - aspect-100 tokamak (a)
+     - ``wb`` agreement
+   * - aspect-100 tokamak, ns=51
      - 97
      - 18
      - 5.4x
-   * - aspect-100 tokamak (b)
+     - 3.6e-11
+   * - aspect-100 tokamak, ns=101
      - 163
      - 15
      - 10.9x
-   * - nfp4 QH, finite beta
+     - 3.8e-11
+   * - nfp4 QH, finite beta, ns=51
      - 1885
-     - 204
-     - 9.2x
+     - 246
+     - 7.7x
+     - 5.7e-7
 
 .. figure:: /_static/figures/readme_precond.webp
    :alt: 2D vs 1D preconditioner iteration counts on stiff cases
@@ -618,9 +645,11 @@ seconds: each 2D Newton step (a GMRES solve over Hessian-vector products) costs
 far more than a 1D radial sweep, so the measured wall-clock ranges 0.55–1.16x
 across easy and stiff decks — a wash to *slower* (≈2x slower on a plain circular
 tokamak, a tie even on the aspect-100 case) — and peak memory is ≈30% higher
-(the extra GMRES/HVP compile graph). The converged ``wb`` matches the 1D result
-to ~1e-10, so it changes the path, not the fixed point. Reach for it when the
-1D iteration count is the bottleneck or stalls, not as a blanket default.
+(the extra GMRES/HVP compile graph). The converged ``wb`` matches the 1D
+result to the agreement column above — 3.6e-11 and 3.8e-11 on the two
+tokamak rows, 5.7e-7 on the stellarator — so it changes the path, not the
+fixed point. Reach for it when the 1D iteration count is the bottleneck or
+stalls, not as a blanket default.
 
 One such stall is reproducible on the aspect-100 case at ``ns=51`` and
 ``FTOL=1e-11``.  With ``PRECON_TYPE='GMRES'`` and
@@ -791,10 +820,10 @@ high-mode HSX case):
   finish in well under a second of CPU work stay faster on the CPU
   (``solovev``: 0.043 s CPU vs 0.29 s CUDA warm).
 - **Fast desktop CPUs change the calculus**: the GPU wins above were
-  measured against the office box's slower server cores. Against an idle
-  Apple-Silicon CPU, the CPU wins every production workflow even at
-  ``ns = 201`` (the table above) — on a modern desktop, treat the GPU as
-  an option for very large or heavily batched solves, not a default.
+  measured against the office box's slower server cores, and no committed
+  record compares an idle Apple-Silicon CPU with that GPU on the same
+  workflow. On a modern desktop, treat the GPU as an option to measure for
+  very large or heavily batched solves, not a default.
 - **High Fourier mode count is a separate limit**: on the same office host,
   the 858-mode HSX deck was 3.44x faster on CPU than on a cache-warm A4000,
   despite its large aggregate work proxy.
@@ -850,9 +879,12 @@ accelerator backends receive no CPU-only flag.
 
 Float64 is required (enforced at solver import). On GPUs this means fp64
 arithmetic, but the solve is latency- rather than FLOP-bound at benchmark
-sizes: the tridiagonal preconditioner solve, for instance, measures identical
-fp32/fp64 GPU times (~15 us per radial row, independent of the number of
-spectral columns).
+sizes: over the 24 ``(ns, ncols)`` points in the ``tridiag`` block of
+``benchmarks/gpu_baseline.json``, the tridiagonal preconditioner solve
+measures an fp32/fp64 time ratio between ``0.95`` and ``1.16`` — halving the
+word width buys nothing — and its cost is 15 to 19 us per radial row,
+essentially independent of the number of spectral columns (a 2400-column
+solve costs what a 30-column solve costs).
 
 GPU decision sweep (office rig)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -40,7 +40,7 @@ solves overlaps their execution and gives real wall-clock speedup. This is what
 :func:`vmex.core.parallel.solve_ensemble` provides.
 
 The recipe (``solve_ensemble``/``map_ensemble``), the correctness contract,
-and the measured 1.79x/2-worker, 3.29x/8-worker strong-scaling table are in
+and how to measure strong scaling on your own host are in
 :doc:`/howto/parallel-ensembles`.
 
 Opaque finite-difference derivatives use the same mechanism through
@@ -138,9 +138,9 @@ Mechanisms considered and rejected
 The threaded ensemble was chosen after comparing three CPU mechanisms on the
 same ``nfp2_QA`` scan:
 
-- **Thread pool over independent host solves** (chosen): 3.29x at 8 workers,
-  bit-identical, and the only option that handles a *heterogeneous* ensemble
-  (different deck shapes) as well as a same-structure scan.
+- **Thread pool over independent host solves** (chosen): real overlap,
+  bit-identical results, and the only option that handles a *heterogeneous*
+  ensemble (different deck shapes) as well as a same-structure scan.
 - **pmap across forced host CPU devices**
   (``XLA_FLAGS=--xla_force_host_platform_device_count=N``): **measured 19 s for
   4 solves that cost ~1.5 s each serially — more than 10x slower.** Splitting
