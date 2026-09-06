@@ -30,11 +30,7 @@ from vmex.core import optimize as opt  # noqa: E402
 from tests.conftest import resolve_golden_dir  # noqa: E402
 
 GOLDEN_DIR = resolve_golden_dir()
-pytestmark = [
-    pytest.mark.skipif(
-        GOLDEN_DIR is None, reason="golden VMEC2000 fixtures unavailable (offline?)"),
-    pytest.mark.usefixtures("_module_jit_enabled"),  # full solves: run jitted
-]
+pytestmark = pytest.mark.usefixtures("_module_jit_enabled")  # full solves: run jitted
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
 CACHE_DIR = Path("/tmp/vmex_test_cache_optimize")
 
@@ -42,6 +38,8 @@ SURFACES = [0.25, 0.5, 0.75, 1.0]
 
 
 def _golden_wout(case: str):
+    if GOLDEN_DIR is None:
+        pytest.skip("golden VMEC2000 fixtures unavailable (offline?)")
     path = GOLDEN_DIR / case / f"wout_{case}.nc"
     if not path.exists():
         pytest.skip(f"missing golden file {path}")
