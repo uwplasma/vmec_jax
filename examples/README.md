@@ -77,6 +77,9 @@ All runnable examples live under this single `examples/` tree. Examples marked
   include radially weighted Mercier and resistive-interchange terms. The shared
   `_scalar_driver.py` contains only the optimizer wiring; each runnable file
   keeps its physical targets, resolution, save names, and validation visible.
+  The scalar lane trades objective progress per evaluation (roughly 3x higher
+  objective at a matched budget on the QA workflow) for a cheaper cold start and
+  lower peak memory; `QA_optimization.py` remains the default.
   `single_stage_optimization.py` *(preview)* varies a prescribed boundary and
   coil Fourier coefficients; it does not call a free-boundary solve.
   `QA_optimization_bootstrap.py`, `QH_optimization_bootstrap.py` and

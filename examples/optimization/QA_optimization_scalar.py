@@ -5,6 +5,11 @@ This minimizes the same weighted sum of squared residuals as
 ``QA_optimization.py``.  The difference is algorithmic: residual rows are
 scalarized before implicit differentiation and SciPy L-BFGS-B receives a value
 and gradient instead of a residual vector and its full Jacobian.
+
+The scalar lane trades objective progress per evaluation for a cheaper cold
+start and lower peak memory: at a matched evaluation budget the least-squares
+driver reached roughly a 3x lower objective on the same problem, so it remains
+the default for objective progress.
 """
 
 from dataclasses import replace

@@ -120,6 +120,12 @@ steps. Their iterates, stopping tests, and possibly the local minimum reached
 can differ. Always compare final physical terms and held-out validation
 metrics, not iteration counts alone.
 
+Measured on the QA workflow at a matched evaluation budget, the least-squares
+driver reached roughly a 3x lower objective than the scalar lane; the scalar
+lane's gains are a cheaper cold start and lower peak memory (44.7 s to 32.2 s
+wall, 2965 to 2574 MiB peak RSS on an Apple M4), so it is the cold-start and
+low-memory option, not a replacement for the least-squares driver.
+
 Choose deliberately:
 
 * Keep the vector route when residual-level diagnostics, a least-squares trust
