@@ -169,7 +169,7 @@ def test_preconditioner_table_matches_its_measurement(manifest: dict) -> None:
 
 
 def test_diagnostics_figure_matches_its_recorded_solve(manifest: dict) -> None:
-    """The regenerated README diagnostics panel names the deck it plots."""
+    """The diagnostics panel and validation page match the recorded solve."""
     record = json.loads((FIGURE_DIR / "readme_diagnostics.json").read_text())
     assert record["schema"] == "vmex.readme-diagnostics-figures/1"
     assert record["provenance"]["measurement_dirty"] is False
@@ -182,10 +182,10 @@ def test_diagnostics_figure_matches_its_recorded_solve(manifest: dict) -> None:
         deck = ROOT / case["deck"]
         assert deck.is_file()
         assert hashlib.sha256(deck.read_bytes()).hexdigest() == case["deck_sha256"]
-        # the README quotes the beta this solve reached
+        # The detailed validation page quotes the beta this solve reached.
         beta = case["scalars"]["betatotal"]
-        readme = (ROOT / "README.md").read_text()
-        assert f"{100 * beta:.2f}" in readme, (
-            f"README does not quote the measured beta {100 * beta:.2f}% "
+        evidence = (ROOT / "docs/explanation/validation.md").read_text()
+        assert f"{100 * beta:.2f}" in evidence, (
+            f"Validation page does not quote the measured beta {100 * beta:.2f}% "
             f"for {case['key']}"
         )

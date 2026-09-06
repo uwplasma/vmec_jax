@@ -12,16 +12,17 @@ gate", the page says so instead of implying coverage.
 
 ## The evidence hierarchy
 
-Not all agreement is worth the same. VMEX's evidence falls into five tiers,
-strongest first, and the rest of this page is organized by them.
+VMEX uses five complementary types of evidence. Each addresses a different
+question; none alone establishes accuracy for every supported model.
 
 1. **Analytic limits.** The answer is known in closed form, so agreement is
-   evidence about the code and nothing else. The mirror module's paraxial
-   and vacuum identities are here.
+   evidence about the implementation within that analytic model. The true
+   Solov'ev projection and mirror paraxial/vacuum identities are here.
 2. **An independent oracle.** A second implementation of the physics, written
    against a different discretization, scores the same equilibrium. VMEX's
-   continuum force-balance oracle is here, and it is the only tier that can
-   compare VMEX against other codes on a quantity none of them optimizes.
+   continuum force-balance oracle is here. Independence must be checked for
+   the specific derivative, representation and normalization under test;
+   analytic and native cross-code tests provide complementary checks.
 3. **Reference-code parity.** VMEC2000 is the reference implementation; VMEX
    reproduces its trajectory and its output file. This is the largest tier by
    test count, and its weakness is structural — it can only show that VMEX
@@ -153,51 +154,114 @@ Quote it by its measured maxima, never as "machine precision":
 `tests/test_performance_docs.py::test_fresh_deck_parity_artifact_is_provenanced_and_cited`
 guards the record's provenance and requires the docs to cite it by path.
 
-## The independent oracle, and the cross-code table
+## Continuous force, native states and WOUT reconstruction
 
-Reference-code parity cannot say whether VMEC2000 is right. For that VMEX
-carries a separate continuum evaluation of the residual
-$\mathbf{J} \times \mathbf{B} - \nabla p$ on a high-order B-spline lift of a
-converged state (`vmex.core.strong_force`), overintegrated to produce a
-certificate independent of the solver's own discretization. It is validated
-in its own right before it is used as a judge:
+`vmex.core.strong_force` evaluates Cartesian `J × B − ∇p` independently of
+VMEC's discrete force residual. Its current/field tests include analytic
+fields and a native DESC reference. The closed-form finite-pressure Solov'ev
+state in `tests/test_strong_force_solovev.py` additionally verifies radial
+and Fourier convergence: this tests representation and differentiation of a
+known equilibrium, not convergence of a VMEX solve to that equilibrium.
 
-- against an analytic constant-toroidal-field case, `rtol` `2e-12` on
-  $\mathbf{B}$ and `2e-11` on $\mathbf{J}$ and the force;
-- against DESC's pointwise current and force on a stored circular case,
-  `rtol=3e-13` on the Jacobian and field and `rtol=3e-10` on the current and
-  force components.
+### Cross-code reconstruction record
 
-Because the oracle is applied to *each code's exported equilibrium*, it gives
-the one genuinely comparable cross-code number. From
-`benchmarks/strong_force_comparison_m4.json`, normalized force-balance $L_2$:
+[`benchmarks/strong_force_comparison_m4.json`](../../benchmarks/strong_force_comparison_m4.json)
+contains the following historical values of pointwise-normalized force L2
+after each output has been sampled to WOUT and reconstructed by VMEX:
 
-| source | shaped tokamak, finite pressure | NFP=2 QA, finite beta |
+| WOUT source | shaped tokamak | NFP=2 QA |
 |---|---|---|
-| VMEX (certified polished) | **0.00179** | 0.52590 |
+| VMEX | 0.00179 | 0.52590 |
 | VMEC2000 | 0.01711 | 0.52518 |
 | VMEC++ | 0.01711 | 0.52518 |
 | DESC | 0.02962 | 0.87926 |
 
-Read both rows. On the tokamak, VMEX's polished state reaches roughly a
-tenth of the VMEC2000 and VMEC++ residual, which agree with each other to
-nine digits. **On the stellarator VMEX is not better** — 0.5259 against
-0.5252 is a tie, marginally on the wrong side, and only DESC is clearly
-worse. The stellarator row is published as a tie rather than omitted; the
-3-D production polish that would move it is not yet tractable. The polish
-gain itself is recorded as a before/after pair on the tokamak, `0.0505` to
-`0.0019`.
+These are **reconstruction measurements, not a ranking of native solvers**.
+The VMEX tokamak output includes polishing and a denser export mesh; the QA
+row does not demonstrate certified 3-D polishing. The original cases were
+selected for successful tokamak polishing, so they do not establish how often
+it helps on other configurations.
 
-The figure and every source hash are guarded by
-`tests/test_performance_docs.py::test_readme_strong_force_figure_matches_committed_sources`,
-and the renderer refuses to draw any source measured from a dirty tree or a
-failed external solve. That guard checks provenance and one ordering claim;
-it does not re-run the physics.
+![Historical WOUT reconstruction measurements](../_static/figures/readme_strong_force_comparison.webp)
+
+The separate [native DESC record](../../benchmarks/desc_native_vs_lifted_2026-09-03.json)
+reports `<|F|>/<|grad p|> = 4.01e-6` on DESC's own shaped-tokamak equilibrium.
+Exporting that state to 129 surfaces and fitting VMEX splines gives pointwise
+normalized L2 `7.13e-2`. Those two norms are different; their quotient is not
+an error amplification factor. They establish that the old table cannot be
+used to claim VMEX is more accurate than DESC. A solver comparison must
+independently refine each native representation and use the same physical
+norm, region, boundary, profiles and flux conventions.
+
+Figure/source hashes remain checked in
+`tests/test_performance_docs.py::test_validation_strong_force_figure_matches_committed_sources`.
+The checks preserve this historical record; they do not rerun the solvers or
+certify a native accuracy ordering.
+
+### What the tokamak polish actually improves
+
+The [same-native-state before/after record](../../benchmarks/polish_force_error_2026-09-03.json)
+uses the same basis and certificate quadrature on the shaped tokamak:
+
+| quantity | before | after | ratio |
+|---|---|---|---|
+| `eps_F` volume L2 (bounded by 2) | `1.284e-2` | `1.803e-3` | 7.1x |
+| dimensional \|F\| volume L2, N m<sup>-3</sup> | `3.330e2` | `2.068e2` | 1.61x |
+| `<\|F\|>/<\|grad p\|>`, whole domain | `2.090e-3` | `1.586e-3` | 1.32x |
+| `<\|F\|>/<\|grad(B^2/2mu0)\|>`, whole domain | `2.374e-3` | `1.801e-3` | 1.32x |
+| `<\|F\|>/<\|grad p\|>`, `s` in `[0.1, 0.99]` | `1.658e-3` | `1.561e-3` | 1.06x |
+| \|F\| L2 near axis (`rho < 0.2`), N m<sup>-3</sup> | `9.773e2` | `6.718e1` | 14.5x |
+| \|F\| L2 bulk (`0.2 <= rho <= 0.8`) | `1.630e2` | `1.470e2` | 1.11x |
+| \|F\| L2 edge (`rho > 0.8`), N m<sup>-3</sup> | `4.089e2` | `2.844e2` | 1.44x |
+
+
+The correction is strongest near the axis. The dimensional volume L2 improves
+1.61x, while the pressure-normalized volume mean improves 1.32x overall and
+1.06x in the stated bulk window. These are different scientific questions;
+the 7.1x pointwise-ratio improvement must never be quoted on its own.
+
+Earlier versions of this section quoted a 26-fold gain from WOUTs exported at
+31 and 129 radial surfaces. That mixed correction and reconstruction effects;
+it is withdrawn. The following historical summary contains those export views:
+
+![Shaped-tokamak geometry and exported force profiles](../_static/figures/readme_polish_summary.webp)
+
+### Vacuum normalization and unsuccessful attempts
+
+The pointwise `eps_F = 2|F|/(|J×B|+|grad p|+floor)` is bounded above by 2 by
+construction. It cannot rank near-vacuum states when it saturates. In the
+[bundled Solovev record](../../benchmarks/polish_force_error_solovev_2026-09-03.json),
+its volume L2 is `1.969`, with `<|grad p|>` = `1.35e-1` Pa/m compared with
+`<|grad(B²/2mu0)|>` = `8.03e3` Pa/m. The dimensional mean force is `4.00e1`
+N/m³ and magnetic-normalized L2 is `1.22e-2`. A zero magnetic-pressure gradient
+also makes that denominator unavailable; dimensional force and a declared
+fixed `B_ref²/(mu0 a_ref)` scale remain meaningful.
+
+[`benchmarks/polish3d_tuning.md`](https://github.com/uwplasma/vmex/blob/main/benchmarks/polish3d_tuning.md) records
+uncertified QA and W7-X attempts of 5 h 22 m and 11 h 09 m on the office CPU.
+Their budgets and normalizations differ, so these do not isolate an angular
+resolution floor or predict success with more iterations. No production 3-D
+polish has yet demonstrated the complete force, stationarity and derivative
+contract. The [method reference](high-order-force-balance.rst) explains the
+remaining functional/chart limitations.
+
+## Application record: finite-beta QI diagnostics
+
+The bundled `input.nfp4_QI_finite_beta` run reached **2.53% beta** at
+`ns=51` in 2,599 iterations. This is an equilibrium/diagnostic example, not
+a new optimization result or a continuous-force certificate. Its input,
+figure and solve provenance are recorded in
+[readme_diagnostics.json](../_static/figures/readme_diagnostics.json).
+
+![Finite-beta QI equilibrium diagnostics](../_static/figures/readme_diagnostics_summary.webp)
 
 ## Derivative certificates
 
-Gradients come from the implicit function theorem at the converged fixed
-point, so the question is whether the linear solve is the true derivative.
+Implicit gradients describe a converged discrete equilibrium. Their validity
+requires nonlinear convergence and a sufficiently accurate linear response
+solve. The tests below check particular cases; they do not guarantee that
+every returned state satisfies both conditions. The ordinary refinement
+fallback and polished nonlinear stationarity gate remain under review.
 
 **Fixed boundary** (`tests/test_implicit_grad.py`). Four adjoint gradients on
 `solovev` — `d(wb)/d(RBC)`, `d(aspect)/d(RBC)`, `d(wb)/d(phiedge)`,
@@ -221,10 +285,13 @@ example prints its adjoint-versus-finite-difference agreement and the test
 fails above `1e-4`. Documentation quotes that gate rather than a particular
 run's number.
 
-For solver-sensitive outputs — `iota`, `DMerc`, `jdotb`, `D_R` — a naive
-re-solving finite difference is not a valid reference at all, and can even
-sign-flip. The frozen-path check described in
-{doc}`/explanation/adjoint-gradients` is the reference there.
+For solver-sensitive outputs — `iota`, `DMerc`, `jdotb`, `D_R` — an
+insufficiently converged re-solving finite difference can be dominated by
+solver noise. The frozen-path checks in
+{doc}`/explanation/adjoint-gradients` isolate linearization consistency; they
+do not replace an independently converged perturbation study of the physical
+objective. That study needs a step-size convergence interval and explicit
+checks that perturbed solves remain on the same admissible branch.
 
 ## Free boundary: the ladder
 
@@ -337,9 +404,10 @@ a claim exists elsewhere.
 - **The 2D block preconditioner as a speed feature.** Its evidence is an
   iteration-count reduction and a `wb` agreement, not a wall-clock or memory
   win; it is opt-in for that reason.
-- **The oracle against an exact solution.** The independent oracle is
-  validated against an analytic constant-field case and against DESC, but
-  there is no analytic Solov'ev equilibrium in its validation set yet.
+- **Recovery of an analytic equilibrium.** The constant-field and true
+  Solov'ev projection tests validate the oracle and representation. They
+  do not establish that the nonlinear high-order solve recovers the analytic
+  state from a perturbed guess or solves a finite-beta 3-D case.
 - **`virtual_casing.py` and `turbulence.py`** are excluded from the coverage
   gate, because their finite-difference gradient tests are optional-dependency
   gated and skip in the core lane.

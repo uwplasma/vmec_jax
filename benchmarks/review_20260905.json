@@ -165,5 +165,638 @@
     "published_at": "2025-08-23T12:44:31Z",
     "tag_name": "v0.16",
     "target_commitish": "main"
+  },
+  "focused_review_20260906": {
+    "date": "2026-09-06",
+    "vmex_base": "ae0e410f6ecc9bc15b66472039f755fdd6dd3ef6",
+    "branch": "review/focused-plan-20260906",
+    "scope": "Planning and documentation only; no production numerical implementation. New execution probes are diagnostic, not paper-grade rankings or release approval.",
+    "environment": {
+      "cpu": "Apple M3 Max",
+      "memory_bytes": 38654705664,
+      "python": "3.11.14",
+      "jax": "0.9.2",
+      "jaxlib": "0.9.2",
+      "numpy": "2.4.6",
+      "scipy": "1.17.1",
+      "solvax": "0.20.0",
+      "precision": "float64",
+      "platform": "cpu",
+      "vmex_compilation_cache": "disabled",
+      "timing_limitations": "Shared host with unrelated work, single first/warm samples for same-deck comparison, no controlled CPU/GPU speedup result."
+    },
+    "repositories": {
+      "VMEX": "ae0e410f6ecc9bc15b66472039f755fdd6dd3ef6",
+      "SOLVAX": "5a49926992fe1a3aebac4b8b8cb098798e977c14",
+      "DESC": "ad105c5e525fbf26824d6cf9dde48775db0f8a2c",
+      "VMEC++": "07ef6710078e78e29ccabab0443cb3ec0ad7e375",
+      "GVEC": "c0dc66fe2b9faa147c76a728e5cd053ce693d472"
+    },
+    "open_vmex_prs": [
+      {
+        "baseRefName": "main",
+        "headRefOid": "db6092b7c4bd97fbeb6d29e927a0b15c175d140e",
+        "number": 277,
+        "title": "Require nonlinear stationarity for polished implicit derivatives",
+        "url": "https://github.com/uwplasma/vmex/pull/277"
+      },
+      {
+        "baseRefName": "main",
+        "headRefOid": "e1714014ebdd3a5804303503fbb16c397c8beb4c",
+        "number": 276,
+        "title": "Make the mirror, ESSOS, and extender examples write their figures as lossless WebP",
+        "url": "https://github.com/uwplasma/vmex/pull/276"
+      },
+      {
+        "baseRefName": "main",
+        "headRefOid": "308d39d5f511a321212e3b767b69d94ac2d94cf9",
+        "number": 274,
+        "title": "Revise the research plan after a second literature review",
+        "url": "https://github.com/uwplasma/vmex/pull/274"
+      },
+      {
+        "baseRefName": "main",
+        "headRefOid": "daf6e2dcf3e4f47dd1d6df29fa4f02893ff7766e",
+        "number": 266,
+        "title": "Coil-length target, the circular-coil seed result, and a profile of the optimizer",
+        "url": "https://github.com/uwplasma/vmex/pull/266"
+      }
+    ],
+    "pr277_ci": {
+      "run": 34005068178,
+      "job": 101410970180,
+      "head": "db6092b7c4bd97fbeb6d29e927a0b15c175d140e",
+      "passed": 226,
+      "failed": 1,
+      "seconds": 2519.45,
+      "failure": "test_collocation_polish_primal_and_derivatives: polish_report.least_squares_success False, physical converged True",
+      "python": "3.12",
+      "jax": "0.11.1",
+      "scipy": "1.18.1",
+      "numpy": "2.5.2",
+      "initial_gradient_norm": 136.207,
+      "disposition": "Unresolved CI/local discrepancy; do not merge as ready or relax stationarity based on local pass."
+    },
+    "local_tests": [
+      {
+        "checkout": "ae0e410f6ecc9bc15b66472039f755fdd6dd3ef6",
+        "command": "VMEX_COMPILATION_CACHE=disabled JAX_PLATFORMS=cpu python -m pytest -q tests/test_radial_basis.py tests/test_strong_force.py",
+        "passed": 67,
+        "seconds": 619.75,
+        "log": "main-physics-tests.log"
+      },
+      {
+        "checkout": "ae0e410f6ecc9bc15b66472039f755fdd6dd3ef6",
+        "command": "VMEX_COMPILATION_CACHE=disabled JAX_PLATFORMS=cpu python -m pytest -q tests/test_strong_force_solovev.py tests/test_implicit_grad.py -k 'not test_implicit_grad or test_solovev_gradients_vs_fd or test_adjoint_gmres_preconditioner_value'",
+        "passed": 9,
+        "deselected": 38,
+        "seconds": 148.21,
+        "log": "analytic-and-ad-tests.log"
+      },
+      {
+        "checkout": "db6092b7c4bd97fbeb6d29e927a0b15c175d140e",
+        "command": "VMEX_COMPILATION_CACHE=disabled JAX_PLATFORMS=cpu python -m pytest -q tests/test_polish_preconditioner.py -k 'collocation_polish_primal_and_derivatives or polish_stationarity'",
+        "passed": 26,
+        "deselected": 205,
+        "seconds": 219.7,
+        "log": "pr277-local.log"
+      },
+      {
+        "checkout": "07ef6710078e78e29ccabab0443cb3ec0ad7e375",
+        "backend": "vmecpp 0.7.3 wheel; not source-built main",
+        "command": "python -m pytest -q tests/test_hessian.py tests/test_adjoint.py",
+        "passed": 4,
+        "seconds": 1.79,
+        "log": "vmecpp-hessian-tests.log"
+      }
+    ],
+    "same_deck_comparison": {
+      "jax": "0.9.2",
+      "vmecpp": "0.7.3",
+      "vmex_path": "${VMEX}/vmex/__init__.py",
+      "vmecpp_path": "${VENV}/lib/python3.11/site-packages/vmecpp/__init__.py",
+      "jit_disabled": false,
+      "rows": [
+        {
+          "input": "input.shaped_tokamak_pressure_polished",
+          "sha256": "2e83e7641e2c63d2bb026390e34d32d9b09cd2fd28d304aecf0b0745045f86f4",
+          "vmex_converged": true,
+          "vmex_iterations": 158,
+          "vmex_fsq": [
+            9.375411796552367e-11,
+            6.119848008908331e-11,
+            2.4407821802681628e-11
+          ],
+          "vmecpp_ier_flag": 0,
+          "vmecpp_iterations": 159,
+          "vmecpp_fsq": [
+            9.37541233310576e-11,
+            6.119848019968397e-11,
+            2.4407821818223215e-11
+          ],
+          "seconds": {
+            "vmex_first": 3.3272795840000526,
+            "vmex_warm": 0.0421686250001585,
+            "vmecpp": 0.006919165999988763
+          },
+          "coefficient_differences": {
+            "rmnc": {
+              "vmex_shape": [
+                31,
+                5
+              ],
+              "vmecpp_shape": [
+                31,
+                5
+              ],
+              "relative_l2": 3.388590174867268e-16,
+              "max_abs": 2.220446049250313e-15
+            },
+            "zmns": {
+              "vmex_shape": [
+                31,
+                5
+              ],
+              "vmecpp_shape": [
+                31,
+                5
+              ],
+              "relative_l2": 1.156584822196693e-15,
+              "max_abs": 2.4494295480792516e-15
+            },
+            "lmns": {
+              "vmex_shape": [
+                31,
+                5
+              ],
+              "vmecpp_shape": [
+                31,
+                5
+              ],
+              "relative_l2": 2.93244128990317e-14,
+              "max_abs": 2.808864252301646e-14
+            },
+            "iotaf": {
+              "vmex_shape": [
+                31
+              ],
+              "vmecpp_shape": [
+                31
+              ],
+              "relative_l2": 3.753085609157598e-15,
+              "max_abs": 2.3092638912203256e-14
+            },
+            "presf": {
+              "vmex_shape": [
+                31
+              ],
+              "vmecpp_shape": [
+                31
+              ],
+              "relative_l2": 1.0660070821894576e-16,
+              "max_abs": 2.9103830456733704e-11
+            }
+          }
+        },
+        {
+          "input": "input.nfp2_QA_smooth_beta",
+          "sha256": "557d33b3a600fa9b81d81f1f4eed6bead36d61abef0eb1ffff8fb3b8d1dd4a64",
+          "vmex_converged": true,
+          "vmex_iterations": 730,
+          "vmex_fsq": [
+            9.894247158307834e-14,
+            4.7475443547452514e-14,
+            5.587326205366158e-14
+          ],
+          "vmecpp_ier_flag": 0,
+          "vmecpp_iterations": 775,
+          "vmecpp_fsq": [
+            9.996862792446534e-14,
+            6.007027019151356e-14,
+            5.603206959933447e-14
+          ],
+          "seconds": {
+            "vmex_first": 8.420759209000153,
+            "vmex_warm": 1.161815790999981,
+            "vmecpp": 0.25787162500000704
+          },
+          "coefficient_differences": {
+            "rmnc": {
+              "vmex_shape": [
+                25,
+                50
+              ],
+              "vmecpp_shape": [
+                25,
+                50
+              ],
+              "relative_l2": 3.732936976559003e-06,
+              "max_abs": 3.1080073362052565e-06
+            },
+            "zmns": {
+              "vmex_shape": [
+                25,
+                50
+              ],
+              "vmecpp_shape": [
+                25,
+                50
+              ],
+              "relative_l2": 1.7880280460449557e-05,
+              "max_abs": 3.312003597563116e-06
+            },
+            "lmns": {
+              "vmex_shape": [
+                25,
+                50
+              ],
+              "vmecpp_shape": [
+                25,
+                50
+              ],
+              "relative_l2": 0.00038726454467204446,
+              "max_abs": 6.796662270543347e-05
+            },
+            "iotaf": {
+              "vmex_shape": [
+                25
+              ],
+              "vmecpp_shape": [
+                25
+              ],
+              "relative_l2": 4.054778630175543e-07,
+              "max_abs": 4.565574504011849e-07
+            },
+            "presf": {
+              "vmex_shape": [
+                25
+              ],
+              "vmecpp_shape": [
+                25
+              ],
+              "relative_l2": 1.553093366253295e-16,
+              "max_abs": 3.637978807091713e-12
+            }
+          }
+        }
+      ],
+      "scope": "Two same-input smoke comparisons, cold and one warm VMEX sample; shared host under unrelated load, no speedup or continuous-force ranking."
+    },
+    "frozen_operator": {
+      "shape": [
+        156,
+        17
+      ],
+      "residual_norm": 12.489995996796798,
+      "gradient_norm": 89.20251409418425,
+      "jacobian_condition": 7150.573848549389,
+      "singular_values": [
+        34.94185465148362,
+        3.5934185374743395,
+        2.343999957220767,
+        2.0614192447375776,
+        1.8893087340990473,
+        1.4035189015197187,
+        1.0962741294250675,
+        0.6726947527725583,
+        0.6123781300017369,
+        0.42135188899319415,
+        0.30422738433880614,
+        0.2615315235139031,
+        0.22013352010258963,
+        0.14252905809619545,
+        0.01817030016117663,
+        0.016150359315831565,
+        0.004886580488721495
+      ],
+      "hessian_eigenvalues": [
+        3.2711793324360223e-05,
+        0.00014643846772689065,
+        0.00041277042208602327,
+        0.02034134041187037,
+        0.04862915108860733,
+        0.06832614577398041,
+        0.09257194705564925,
+        0.17736365937833998,
+        0.37582706735508364,
+        0.4520888848647182,
+        1.2012398962717075,
+        1.9704019256023448,
+        3.568012654959782,
+        4.250117548147724,
+        5.495819302348805,
+        12.915840433278222,
+        1220.700677003671
+      ],
+      "hessian_asymmetry": 1.1306507981820538e-16,
+      "relative_residual_curvature": 0.0002081201394247876,
+      "hvp_fd": [
+        {
+          "h": 0.001,
+          "relative_error": 3.883967206188094e-09
+        },
+        {
+          "h": 0.0001,
+          "relative_error": 5.165197383807448e-09
+        },
+        {
+          "h": 1e-05,
+          "relative_error": 6.215569608799817e-07
+        }
+      ],
+      "linear_solves": [
+        {
+          "method": "cg",
+          "damping": 0.001,
+          "iterations": 31,
+          "status": 0,
+          "relative_true_normal_residual": 1.1720406115611463e-09,
+          "relative_step_error": 1.2184025026611418e-08
+        },
+        {
+          "method": "diagonal-cg",
+          "damping": 0.001,
+          "iterations": 30,
+          "status": 0,
+          "relative_true_normal_residual": 2.6630358114620546e-09,
+          "relative_step_error": 2.7471211865860735e-08
+        },
+        {
+          "method": "lsmr",
+          "damping": 0.001,
+          "iterations": 35,
+          "status": 2,
+          "relative_true_normal_residual": 1.441091275168273e-13,
+          "relative_step_error": 9.537445639589702e-13
+        },
+        {
+          "method": "cg",
+          "damping": 1e-06,
+          "iterations": 36,
+          "status": 0,
+          "relative_true_normal_residual": 8.019260553513125e-09,
+          "relative_step_error": 7.768164716810475e-10
+        },
+        {
+          "method": "diagonal-cg",
+          "damping": 1e-06,
+          "iterations": 32,
+          "status": 0,
+          "relative_true_normal_residual": 4.653084203032371e-09,
+          "relative_step_error": 1.209934544264871e-08
+        },
+        {
+          "method": "lsmr",
+          "damping": 1e-06,
+          "iterations": 39,
+          "status": 2,
+          "relative_true_normal_residual": 2.709934288001117e-12,
+          "relative_step_error": 4.143064945240716e-11
+        }
+      ],
+      "elapsed_seconds": 66.68251699999996,
+      "scope": "Frozen current collocation functional at initial tiny Solovev lift; no nonlinear convergence, Cartesian metric, 3-D speedup, or solver promotion established."
+    },
+    "native_desc": {
+      "controls": {
+        "ftol": 1e-08,
+        "gtol": 1e-08,
+        "maxiter": 60,
+        "xtol": 1e-08
+      },
+      "cost": 1.157390594701348e-09,
+      "devices": [
+        "TFRT_CPU_0"
+      ],
+      "engine": "desc",
+      "input": "input.shaped_tokamak_pressure_polished.vmex.nc",
+      "iterations": 28,
+      "message": "`gtol` condition satisfied. (gtol=1.00e-08)",
+      "native_force_error": {
+        "mean_force_density": 9.01256834646453,
+        "mean_grad_magnetic_pressure": 98541.56674505181,
+        "mean_grad_pressure": 111822.96707843934,
+        "normalized_by_magnetic_pressure": 9.145956010403183e-05,
+        "normalized_by_pressure_gradient": 8.059675558548338e-05
+      },
+      "optimality": 8.383996226987486e-10,
+      "output_wout": "desc-shaped.nc",
+      "peak_rss_mib": 1979.984375,
+      "platform": "macOS-14.4.1-arm64-arm-64bit",
+      "representation": {
+        "L": 12,
+        "M": 6,
+        "N": 0,
+        "profile": "iota",
+        "spectral_indexing": "fringe",
+        "surfaces": 129
+      },
+      "schema": "vmex.external-equilibrium-run/2",
+      "source": {
+        "commit": "ad105c5e525fbf26824d6cf9dde48775db0f8a2c",
+        "dirty": false
+      },
+      "success": true,
+      "timing_seconds": {
+        "load": 7.899356542000078,
+        "save": 14.296006457999965,
+        "solve": 7.237265125000022,
+        "total": 29.600268417000052
+      },
+      "versions": {
+        "desc": "0.17.1+11.g2471d5504.dirty",
+        "jax": "0.9.2",
+        "python": "3.11.14"
+      },
+      "provenance_correction": "versions.desc is inherited installed-distribution metadata, not the executed source version; PYTHONPATH selected clean DESC ad105c5e525fbf26824d6cf9dde48775db0f8a2c. Source path/SHA identifies this run."
+    },
+    "gvec": {
+      "build": "GNU Fortran 13.4, OpenBLAS; Release, USE_OPENMP=OFF, LINK_GVEC_TO_NETCDF=OFF",
+      "example": "test-CI/examples/analytic_gs_elliptok/parameter.ini",
+      "configuration_changes": "For second run, only maxiter=3000 and ProjectName changed; default minimize_tol=1e-10 retained.",
+      "exit_code": 0,
+      "converged": false,
+      "reason": "maximum iteration count exceeded",
+      "iterations": 3000,
+      "last_force_channels": [
+        2.8735828531448e-09,
+        3.5846481016375e-09,
+        3.7509337244465e-08
+      ],
+      "reported_minimization_seconds": 3.47,
+      "reported_total_seconds": 4.08,
+      "scope": "Different analytic problem from VMEX decks; no matched native-force or speed ranking. Original 100-iteration run also capped."
+    },
+    "commands": {
+      "environment": "python -m venv --system-site-packages ${EVIDENCE}/venv; ${VENV}/bin/python -m pip install --no-deps vmecpp==0.7.3 adv-jax-math==1.2",
+      "desc": "PYTHONPATH=${DESC} JAX_PLATFORMS=cpu OMP_NUM_THREADS=1 ${VENV}/bin/python ${VMEX}/benchmarks/run_external_equilibrium.py desc --wout ${EVIDENCE}/input.shaped_tokamak_pressure_polished.vmex.nc --output-wout ${EVIDENCE}/desc-shaped.nc --report ${EVIDENCE}/desc-shaped.json --source-repo ${DESC} --L 12 --M 6 --N 0 --surfaces 129 --tolerance 1e-8 --maxiter 60",
+      "gvec_configure": "cmake -S ${GVEC} -B ${EVIDENCE}/gvec-build -DCMAKE_BUILD_TYPE=Release -DUSE_OPENMP=OFF -DLINK_GVEC_TO_NETCDF=OFF",
+      "gvec_build": "cmake --build ${EVIDENCE}/gvec-build --parallel 2",
+      "gvec_execute": "Copy the analytic_gs_elliptok parameter.ini and its referenced files from the pinned source into an output directory, apply the two declared parameter changes, then run ${EVIDENCE}/gvec-build/bin/gvec parameter-refined.ini there."
+    },
+    "reproduction_probes": {
+      "compare_vmex_vmecpp.py": {
+        "sha256": "3d2337fe622918b6d2204fe4bfed9365721655e9a69817e94923b5f91bbb3b66",
+        "command": "VMEX_COMPILATION_CACHE=disabled JAX_PLATFORMS=cpu OMP_NUM_THREADS=1 PYTHONPATH=${VMEX} ${VENV}/bin/python compare_vmex_vmecpp.py ${VMEX} ${EVIDENCE}",
+        "source": "import sys, json, time, hashlib, os\nfrom pathlib import Path\nimport numpy as np\nimport jax\njax.config.update(\"jax_enable_x64\", True)\nimport vmex as vj\nimport vmecpp\nfrom importlib.metadata import version\nrepo=Path(sys.argv[1]); dest=Path(sys.argv[2]); rows=[]\nfor name in [\"input.shaped_tokamak_pressure_polished\", \"input.nfp2_QA_smooth_beta\"]:\n    path=repo/\"examples/data\"/name\n    inp=vj.VmecInput.from_file(path)\n    vpp=vmecpp.VmecInput.from_file(path)\n    t=time.perf_counter(); cpp=vmecpp.run(vpp, max_threads=1, verbose=False); cpp_seconds=time.perf_counter()-t\n    t=time.perf_counter(); result=vj.solve_multigrid(inp, verbose=False, polish_force_balance=False); jax.block_until_ready(result.state); first=time.perf_counter()-t\n    t=time.perf_counter(); again=vj.solve_multigrid(inp, verbose=False, polish_force_balance=False); jax.block_until_ready(again.state); warm=time.perf_counter()-t\n    w=vj.wout_from_state(inp=inp,state=result.state,fsqr=result.fsqr,fsqz=result.fsqz,fsql=result.fsql,niter=result.iterations,converged=result.converged)\n    vj.write_wout(dest/(name+\".vmex.nc\"),w); cpp.wout.save(dest/(name+\".vmecpp.nc\"))\n    diffs={}\n    for key in [\"rmnc\",\"zmns\",\"lmns\",\"iotaf\",\"presf\"]:\n        a=np.asarray(getattr(w,key)); b=np.asarray(getattr(cpp.wout,key))\n        if a.shape!=b.shape and a.shape==b.T.shape:b=b.T\n        diffs[key]={\"vmex_shape\":list(a.shape),\"vmecpp_shape\":list(b.shape),\"relative_l2\":float(np.linalg.norm(a-b)/max(np.linalg.norm(b),1e-30)),\"max_abs\":float(np.max(np.abs(a-b)))}\n    row=dict(input=name,sha256=hashlib.sha256(path.read_bytes()).hexdigest(),vmex_converged=bool(result.converged),vmex_iterations=int(result.iterations),vmex_fsq=[float(result.fsqr),float(result.fsqz),float(result.fsql)],vmecpp_ier_flag=int(cpp.wout.ier_flag),vmecpp_iterations=int(cpp.wout.niter),vmecpp_fsq=[float(cpp.wout.fsqr),float(cpp.wout.fsqz),float(cpp.wout.fsql)],seconds=dict(vmex_first=first,vmex_warm=warm,vmecpp=cpp_seconds),coefficient_differences=diffs)\n    rows.append(row);print(json.dumps(row),flush=True)\n    (dest/\"same-deck-comparison.json\").write_text(json.dumps(dict(jax=jax.__version__,vmecpp=version(\"vmecpp\"),vmex_path=vj.__file__,vmecpp_path=vmecpp.__file__,jit_disabled=bool(jax.config.jax_disable_jit),rows=rows,scope=\"Two same-input smoke comparisons, cold and one warm VMEX sample; shared host under unrelated load, no speedup or continuous-force ranking.\"),indent=2))\n"
+      },
+      "frozen_operator.py": {
+        "sha256": "1f443a232c6a21418a3ea4e2585e1e0fa1707108f5a3f6c488b951261bf828b2",
+        "command": "VMEX_COMPILATION_CACHE=disabled JAX_PLATFORMS=cpu PYTHONPATH=${VMEX} python frozen_operator.py ${VMEX} ${EVIDENCE}/frozen-operator.json",
+        "source": "import importlib.util, sys, json, time\nfrom pathlib import Path\nimport jax\njax.config.update('jax_enable_x64',True)\nimport jax.numpy as jnp\nimport numpy as np\nfrom scipy.sparse.linalg import cg, lsmr, LinearOperator\nfrom vmex.core.polish import make_strong_structured_chart, strong_collocation_residual\nfrom vmex.core.polish_driver import _collocation_variable_scale\nrepo=Path(sys.argv[1]); out=Path(sys.argv[2]); started=time.perf_counter()\nspec=importlib.util.spec_from_file_location('polish_tests',repo/'tests/test_polish_preconditioner.py'); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nrt=m.small_strong_root.__wrapped__(m.small_adapter.__wrapped__())\nchart=make_strong_structured_chart(rt,balance_iterations=1,balance_probes=2)\nx=jnp.zeros(chart.size); r0=strong_collocation_residual(x,rt,chart); a=jnp.sqrt(jnp.mean(r0*r0)); D=_collocation_variable_scale(rt,chart,a,x,int(r0.size),2)\nr=lambda y: strong_collocation_residual(D*y,rt,chart)/a\nf=lambda y: .5*jnp.vdot(r(y),r(y))\nrr=np.asarray(r(x)); J=np.asarray(jax.jit(jax.jacfwd(r))(x)); H=np.asarray(jax.jit(jax.hessian(f))(x)); g=J.T@rr\ns=np.linalg.svd(J,compute_uv=False); eig=np.linalg.eigvalsh((H+H.T)/2)\nv=np.random.default_rng(4).normal(size=x.size);v/=np.linalg.norm(v)\nfd=[]\ngrad=jax.jit(jax.grad(f)); hv=H@v\nfor h in [1e-3,1e-4,1e-5]:\n z=(np.asarray(grad(x+h*v))-np.asarray(grad(x-h*v)))/(2*h)\n fd.append(dict(h=h,relative_error=float(np.linalg.norm(z-hv)/np.linalg.norm(hv))))\nrows=[]\nfor mu in [1e-3,1e-6]:\n A=J.T@J+mu*np.eye(x.size);b=-g\n ref=np.linalg.lstsq(np.vstack([J,np.sqrt(mu)*np.eye(x.size)]),np.r_[-rr,np.zeros(x.size)],rcond=None)[0]\n for label,M in [('cg',None),('diagonal-cg',LinearOperator(A.shape,matvec=lambda z:z/np.diag(A)))]:\n  count=[0]\n  def callback(z):count[0]+=1\n  z,status=cg(A,b,rtol=1e-8,atol=0,maxiter=10*x.size,M=M,callback=callback)\n  rows.append(dict(method=label,damping=mu,iterations=count[0],status=int(status),relative_true_normal_residual=float(np.linalg.norm(A@z-b)/np.linalg.norm(b)),relative_step_error=float(np.linalg.norm(z-ref)/np.linalg.norm(ref))))\n z=lsmr(J,-rr,damp=np.sqrt(mu),atol=1e-12,btol=1e-12,conlim=1e12,maxiter=10*x.size)\n rows.append(dict(method='lsmr',damping=mu,iterations=int(z[2]),status=int(z[1]),relative_true_normal_residual=float(np.linalg.norm(A@z[0]-b)/np.linalg.norm(b)),relative_step_error=float(np.linalg.norm(z[0]-ref)/np.linalg.norm(ref))))\nreport=dict(shape=list(J.shape),residual_norm=float(np.linalg.norm(rr)),gradient_norm=float(np.linalg.norm(g)),jacobian_condition=float(s[0]/s[-1]),singular_values=s.tolist(),hessian_eigenvalues=eig.tolist(),hessian_asymmetry=float(np.linalg.norm(H-H.T)/np.linalg.norm(H)),relative_residual_curvature=float(np.linalg.norm(H-J.T@J)/np.linalg.norm(H)),hvp_fd=fd,linear_solves=rows,elapsed_seconds=time.perf_counter()-started,scope='Frozen current collocation functional at initial tiny Solovev lift; no nonlinear convergence, Cartesian metric, 3-D speedup, or solver promotion established.')\nout.write_text(json.dumps(report,indent=2));print(json.dumps(report),flush=True)\n"
+      }
+    },
+    "failed_attempts": [
+      "First comparison harness passed unsupported keyword polish; corrected to polish_force_balance before obtaining measurements.",
+      "First fresh DESC run lacked adv_jax_math; installed 1.2 in isolated venv and reran successfully.",
+      "GVEC reached iteration cap at both 100 and 3000 iterations, despite exit code 0."
+    ],
+    "external_evidence": {
+      "local_directory": "${LOCAL_ROOT}/vmex-review-evidence-20260906",
+      "public_archive": null,
+      "note": "Essential results and probe sources are embedded here; native states and large build/runtime outputs remain outside git. A persistent public archive is required before publication."
+    },
+    "artifacts": [
+      {
+        "path": "analytic-and-ad-tests.log",
+        "bytes": 125,
+        "sha256": "56638b3646e264a80688ea5f088e04bb8539b2ba04256aaddc2b5b4ce92c0fdb"
+      },
+      {
+        "path": "desc-dependencies.log",
+        "bytes": 1036,
+        "sha256": "e042e3e27516c78290f68a9ca1c8562c74ed4a8f08d664188e09b603adb42333"
+      },
+      {
+        "path": "desc-shaped.log",
+        "bytes": 1344,
+        "sha256": "dd41e3a2be5c2a11e2ea15922ddc764b6b2ee70a6227af037446173879e6a8b6"
+      },
+      {
+        "path": "frozen-operator.log",
+        "bytes": 2426,
+        "sha256": "afd742e8a9c8331e553d7f4105859dca844abe0ef2c023a3765fb300c4fb9f95"
+      },
+      {
+        "path": "gvec-build.log",
+        "bytes": 8552,
+        "sha256": "ff2dc09e3d1a936c0c8e5e20c7fdcd2bdfb85111975cce0ffa8a33f0f0ef0986"
+      },
+      {
+        "path": "main-physics-tests.log",
+        "bytes": 111,
+        "sha256": "f73b0f48bf189b9b72a39c0429204b1a8a804c68f19c51b9583bcb3d82051b77"
+      },
+      {
+        "path": "performance-doc-tests.log",
+        "bytes": 99,
+        "sha256": "07b0afc728982e3d6e70ae417856dc95f7526fdd88768a8455655a7f10b578d4"
+      },
+      {
+        "path": "pr277-local.log",
+        "bytes": 127,
+        "sha256": "923fb53fc2f5a5ad033cc0df45920f5e344cd75572319a3226186a47fc358ce6"
+      },
+      {
+        "path": "pr277-polish-ci.log",
+        "bytes": 96991,
+        "sha256": "2effc09cadda35ca6f40c1c06ccc8bb81c12b9bb043ce7be9fafa0ca90fefca1"
+      },
+      {
+        "path": "same-deck-comparison.log",
+        "bytes": 2348,
+        "sha256": "d655a7886f03f2926c9348ee4a2b3f77759d021d8bf5f8d8637de7ad80f4781a"
+      },
+      {
+        "path": "vmecpp-hessian-tests.log",
+        "bytes": 98,
+        "sha256": "1dde2ec73bb2d1eac48a0b7a1add920157c690038c32f874102b48b2b20484f8"
+      },
+      {
+        "path": "vmecpp-install.log",
+        "bytes": 1528,
+        "sha256": "187e6c7863205e57c4fdc06c7501cd52a38a4c754955204a194c956e75b20e3a"
+      },
+      {
+        "path": "gvec-analytic/refined.log",
+        "bytes": 60118,
+        "sha256": "d435d383de5001a08e935d6c767f24061e268c50e624a8c8ccc12a336f5f44c2"
+      },
+      {
+        "path": "preflight-final.log",
+        "bytes": 4313,
+        "sha256": "0159268690c4a198cf75d43e73cea957b45c7fe0de73883a0c15f07d66a744a7"
+      },
+      {
+        "path": "figure-provenance-final.log",
+        "bytes": 98,
+        "sha256": "9646ce79c776ab25c6f0027f5d1456ee841bfea7e77306ea4e7c21bdec48ecb1"
+      },
+      {
+        "path": "linkcheck.log",
+        "bytes": 13082,
+        "sha256": "4da4c36402c99d25e99f1205d2bab877f7870fb57cdc826a30d5114ed2b5466d"
+      },
+      {
+        "path": "readme-workflow.log",
+        "bytes": 1302,
+        "sha256": "bbcacf66a1a376f4effc519676556ca421a64249cc4f573177cf876e401c2e00"
+      }
+    ],
+    "source_size_at_base": {
+      "vmex/core": {
+        "python_files": 58,
+        "python_text_lines": 52563
+      },
+      "vmex/mirror": {
+        "python_files": 14,
+        "python_text_lines": 9376
+      }
+    },
+    "planning_validation": {
+      "production_code_changed": false,
+      "preflight": {
+        "command": "python tools/preflight.py --static --docs",
+        "status": "passed",
+        "guards_passed": 59,
+        "guard_seconds": 9.45,
+        "components": [
+          "Ruff",
+          "mypy",
+          "docs prose/media",
+          "strict Sphinx HTML",
+          "manifest/performance/docs/API/packaging/coverage guards"
+        ]
+      },
+      "figures": {
+        "command": "python -m pytest -q tests/test_figure_provenance.py",
+        "passed": 7,
+        "seconds": 0.24
+      },
+      "performance_records": {
+        "command": "python -m pytest -q tests/test_performance_docs.py",
+        "passed": 19,
+        "seconds": 5.74,
+        "note": "Also included in the 59 preflight guards; not additional distinct tests."
+      },
+      "linkcheck": {
+        "command": "python -m sphinx -b linkcheck docs docs/_build/linkcheck",
+        "status": "passed"
+      },
+      "readme_workflow": {
+        "method": "Concatenate the three Python blocks from the new README; substitute the bundled circular-tokamak deck for input.my_case; write all outputs outside git. Run CPU, cache disabled, with a 300-second subprocess timeout.",
+        "equilibrium_converged": true,
+        "optimizer_success": true,
+        "optimizer_nfev": 3,
+        "optimizer_final_cost": 3.35539794755465e-30,
+        "scope": "Executable solve/gradient/optimization/export walkthrough; no additional scientific certification implied.",
+        "script_sha256": "c176072ab58d5ab55512150bd67f4966d91198d4fcf6c1473dc6a62d5fc18053"
+      },
+      "readme_targets": "All local links, current documentation page targets and directly named example scripts exist.",
+      "repair_log": [
+        "Initial strict Sphinx build rejected a relative Markdown link outside docs; changed it to the GitHub benchmark page.",
+        "The diagnostics-provenance guard initially required a beta number in README. Relocated the figure and measured beta to validation.md and redirected the same numeric/hash guard; no tolerance weakened."
+      ]
+    }
   }
 }
