@@ -1554,26 +1554,26 @@ status and never blocks.
 | 7 | #259 symmetry flags | **merged 2026-09-05** (ecdca62e) | — |
 | 8 | #254 cache entry bound | **merged 2026-09-05** (928d4fc3) | — |
 | 9 | #253 hygiene | **merged 2026-09-05** (b7538376) | — |
-| 10 | #256 figures/validation page | rebased on 9: kept its no-GPU-claim performance text over #253's; merged the two historical artifacts' provenance blocks with #253's committing-commit SHAs and `input_data_embedded` false (the files hold no deck); CI pending | Merge when green; retarget #276 to main first |
-| 11 | #257 API reference | rebased on 1–10 twice (the #258, #261 and #262 docstrings folded in; stale `angular_spectral_tail`, `nestedness_margin` and `am` text corrected; `ForceErrorNormalizations` indexed; two field notes demoted so autodoc `-W` does not see them twice); CI pending | Merge when green; retarget #265 to main first |
-| 12 | #265 optimizer output + free-boundary adjoint | green except codecov | Split: the trial printing and the duplicate-gradient fix merge; `adjoint_fail="best_effort"` stays opt-in and is never used by a certified example (F1) |
+| 10 | #256 figures/validation page | **merged 2026-09-05** (9468411c) after the rebase on 9 (its no-GPU-claim performance text kept; the two historical artifacts' provenance merged with #253's committing-commit SHAs, `input_data_embedded` false) | — |
+| 11 | #257 API reference | **merged 2026-09-05** (7f4225fe) after two rebases over 1–10 (#258/#261/#262 docstrings folded in; stale `angular_spectral_tail`, `nestedness_margin` and `am` text corrected; `ForceErrorNormalizations` indexed; two field notes demoted for autodoc `-W`) | — |
+| 12 | #265 optimizer output + free-boundary adjoint | rebased on main twice (over #257's docstrings and #197's example reshuffle); the two single-stage examples now run on the default `adjoint_fail="error"` with `boundary_schur` — measured on the office box (CPU, jax 0.9.2, SOLVAX 0.20.0): 20 L-BFGS-B iterations, 35 trials, no adjoint warning, cost 9.0e+03 → 3.12e-04, QA 6.89e-04, aspect 5.999, min iota 0.414; `best_effort` stays opt-in; the one-solve-per-iteration fix ported into `_scalar_driver.py`; CI pending | Merge when green; retarget #266 to main first |
 | 13 | #266 coil target/seed/profile | stacked on #265 | Merge after 12 |
 | 14 | #261 polish memory/AUTO/heartbeat | **merged 2026-09-05** (189b75fb): the batched, checkpointed certificate (W7-X 34.23 GiB → 3.02 GiB certificate / 15.44 GiB chart, artifact committed), the priced AUTO with `POLISH_BUDGET`, the live Gauss–Newton heartbeat, and the honest README scope; rebased over #258, #269/#270 and #280; its parity lanes ran green at e-polish 44 min and f-options 14 min | 0.8.2 is ready to tag — a maintainer action |
-| 15 | #197 contributor examples | behind main | Rebase (`codex/scalar-optimization-drivers-rebased` is clean); add the one-sentence trade note; merge as examples |
+| 15 | #197 contributor examples | **merged 2026-09-05** (ad26fef1) after the rebase and the one-sentence trade note in all nine scalar files, the README and the docs page | — |
 | 16 | #280 force-error normalizations (was #275/#279) | **merged 2026-09-05** (445ab9a7). It took three rounds after the rebase over #258: regenerate the pinned certificate baseline for the two redefined fields; give #269's stand-in certificates the new `window_normalizations`; and replace the guard's array byte-hashes with L2/Linf norms plus an absolute floor of 1e-12 for scalars, because the same arithmetic differs by 1e-12 to 4e-12 between Apple silicon and the x86 runners and a hash can only pass on the machine that wrote it. Every "26-fold" number is retired | — |
 | 17 | #272 Γ_c prompt-loss wording | **merged 2026-09-05** (eb2fdc1d) | — |
 | 18 | #278 kind-aware `am` scaling | **merged 2026-09-05** (fedde0a9) | — |
-| 19 | #273 optimizer fixture scope | rebased on main; the 34 optimizer tests pass without the golden fixtures; CI pending | Merge when green |
-| 20 | #277 stationarity before polished derivatives | rebased on main; 142 polish tests pass; CI pending | Merge when green |
-| 21 | #271 flux-tube ε/R0 | auto-closed when #263's branch was deleted (GitHub closes every PR based on a deleted branch); rebased on main and reopened; CI pending | Merge when green |
-| 22 | #276 (stacked on #256) | open, base #256 | Retarget to main before #256 merges, then rebase |
+| 19 | #273 optimizer fixture scope | **merged 2026-09-05** (e09bcbdb) | — |
+| 20 | #277 stationarity before polished derivatives | rebased three times (each merge above touched its logbook or the docstrings #257 rewrote); its `PolishLinearConfig`, `PolishContext`, `StrongForceCertificationError` and `collocation_polish_root` docstrings are merged with the API reference text; CI pending | Merge when green |
+| 21 | #271 → #281 flux-tube ε/R0 | #271 was auto-closed when #263's branch was deleted and GitHub refuses to reopen a PR whose base is gone; reopened as #281 on main and **merged 2026-09-05** (357dcbbd) | — |
+| 22 | #276 lossless-WebP example figures | retargeted to main before #256 merged, rebased (CHANGELOG both sides); CI pending | Merge when green |
 
 CI shape after this round: the polish lane was split again — `test_run_options.py` is lane f on its own, and the four heaviest
 new polish tests in #261 (a live-progress heartbeat at 307 s, the ntor = 1 projection diagnostics at 235 s, two AUTO pricing
 paths at ~150 s each, all real polishes on an M4) carry `@pytest.mark.full` and run nightly; lane e had reached 25 minutes on
 main after #269's 705-s Solov'ev correction and timed out at 55 with them in the PR tier.
 
-Steps 1–9, 14 and 16–18 are merged (2026-09-05). Steps 10, 11 and 19–21 are rebased on main with CI pending; 12, 13, 15 and 22 wait on them. With #259 and #262 in, **v0.8.2 can be tagged now** (a maintainer action). Two merge-mechanics facts learned on the way: a push and a base retarget within the same minute start two CI runs for one SHA and `cancel-in-progress` kills one, so wait on the surviving run id, not the head SHA; and deleting a merged PR's branch closes every PR stacked on it, so retarget dependents to main first.
+Steps 1–11, 14–19 and 21 are merged (2026-09-05). Steps 12, 20 and 22 are rebased on main with CI pending; 13 waits on 12. With #259 and #262 in, **v0.8.2 can be tagged now** (a maintainer action). Three merge-mechanics facts learned on the way: a push and a base retarget within the same minute start two CI runs for one SHA and `cancel-in-progress` kills one, so wait on the surviving run id, not the head SHA; deleting a merged PR's branch closes every PR stacked on it and the closed PR cannot be reopened, so retarget dependents to main first; and every merge that touches the plan logbook or a docstring dirties the PRs still queued, so merge the logbook-carrying PRs last and in quick succession.
 user-facing release (no OOM at W7-X scale, a priced AUTO, a heartbeat, a
 cache that does not slow down with age, correct certificate diagnostics)
 that makes no new 3-D accuracy claim.
