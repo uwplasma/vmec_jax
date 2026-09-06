@@ -23,6 +23,7 @@ from .geometry import (
 )
 from .model import MirrorState
 from .splines import SplineMirrorDiscretization, trace_closed_field_line
+from vmex.core.turbulence import b_modulation_depth
 
 Array = Any
 
@@ -174,18 +175,24 @@ def gk_closed_fieldline_geometry(
     Open mirrors are intentionally rejected by requiring a closed
     discretization.
 
-    The ``epsilon`` key follows the VMEX flux-tube contract shared with
-    :mod:`vmex.core.turbulence`: ``std(|B|) / mean(|B|)`` along the tube.  It
-    is deliberately *not* what GS2-family codes mean by that key.  In GKX's own
-    analytic geometry ``epsilon`` is the inverse aspect ratio, entering as
-    ``|B| = B0 / (1 + epsilon cos(theta))`` and used to set the minor radius
-    ``a = epsilon * R0`` when it writes run artifacts.  A straight mirror has
-    no aspect ratio, so nothing exported here can carry that meaning.  Read the
-    mirror ratio from ``vmex_mirror["field_line_mirror_ratio"]``
-    (``max|B| / min|B|`` on this field line, the field-line member of the
-    definitions in :mod:`vmex.mirror.metrics`), and read the tokamak-equivalent
-    modulation depth ``(max|B| - min|B|) / (max|B| + min|B|)`` from
-    ``vmex_mirror["field_line_b_modulation"]``.
+    The scalar metadata ``epsilon`` and ``R0`` use the one VMEX definition
+    shared with :mod:`vmex.core.turbulence`, chosen to be what GKX means by
+    the keys: its analytic geometry is ``|B| = B0 / (1 + epsilon cos(theta))``
+    and it sets ``aminor = epsilon * R0`` when it writes run artifacts.
+    ``epsilon`` is the field-line ``|B|`` modulation depth
+    ``(max|B| - min|B|) / (max|B| + min|B|)``
+    (:func:`vmex.core.turbulence.b_modulation_depth`): exactly that model's
+    ``epsilon``, and defined on a straight mirror, which has no aspect ratio
+    to offer instead.  ``R0`` is the effective major radius
+    ``L_axis / (2 pi)`` -- by the ``L_ref`` definition also
+    ``V / (2 pi^2 L_ref^2)``, the identity behind VMEC's ``Rmajor_p`` -- so
+    ``epsilon * R0`` is a length rather than a fraction of ``L_ref``.  The
+    same numbers are exported under their VMEX names:
+    ``vmex_mirror["field_line_mirror_ratio"]`` is ``max|B| / min|B|`` on this
+    field line, the field-line member of the definitions in
+    :mod:`vmex.mirror.metrics` and equal to ``(1 + epsilon) / (1 - epsilon)``;
+    ``vmex_mirror["field_line_b_modulation"]`` repeats ``epsilon``; and
+    ``vmex_mirror["R_major"]`` repeats ``R0``.
     """
 
     if not discretization.closed:
@@ -237,6 +244,9 @@ def gk_closed_fieldline_geometry(
     b_sup_u_fine = _surface_interpolate(tensors["b_sup_u"], discretization, line.theta, line.axial_parameter)
 
     effective_minor_radius = jnp.sqrt(geometry.volume / (jnp.pi * jnp.asarray(axis.arc_length)))
+    # Major radius of the circular torus with this axis length; with the L_ref
+    # above it is also V / (2 pi^2 L_ref^2), the identity behind VMEC's Rmajor_p.
+    effective_major_radius = jnp.asarray(axis.arc_length) / (2.0 * jnp.pi)
     b_reference = 2.0 * jnp.abs(jnp.asarray(axial_flux_derivative)) / (effective_minor_radius**2)
     gradpar_fine = effective_minor_radius * jnp.abs(b_sup_u_fine) / mod_b_fine
     du = line.axial_parameter[1] - line.axial_parameter[0]
@@ -286,6 +296,7 @@ def gk_closed_fieldline_geometry(
     grad_rho = effective_minor_radius * jnp.sqrt(sampled["grad_s_sq"]) / (2.0 * sqrt_s)
     iota = poloidal_advance / (2.0 * jnp.pi)
     q = jnp.where(jnp.abs(iota) > 1.0e-10, 1.0 / jnp.abs(iota), 1.0)
+    modulation = b_modulation_depth(bmag)
 
     return {
         "theta": theta,
@@ -303,8 +314,8 @@ def gk_closed_fieldline_geometry(
         "grho": grad_rho,
         "q": q,
         "s_hat": 0.0,
-        "epsilon": jnp.std(bmag) / jnp.mean(bmag),
-        "R0": effective_minor_radius,
+        "epsilon": modulation,
+        "R0": effective_major_radius,
         "B0": b_reference,
         "alpha": float(theta0),
         "nfp": 1,
@@ -312,14 +323,15 @@ def gk_closed_fieldline_geometry(
             "surface_index": j,
             "s": s_value,
             "iota": iota,
-            # The field-line member of the mirror-ratio definitions; see
-            # vmex.mirror.metrics for R_m,axis and R_m,LCFS, and the docstring
-            # above for why "epsilon" is not any of them.
+            # The field-line member of the mirror-ratio definitions (see
+            # vmex.mirror.metrics for R_m,axis and R_m,LCFS); "epsilon" above
+            # is the same modulation depth, R_m = (1 + eps) / (1 - eps).
             "field_line_mirror_ratio": jnp.max(bmag) / jnp.min(bmag),
-            "field_line_b_modulation": (jnp.max(bmag) - jnp.min(bmag)) / (jnp.max(bmag) + jnp.min(bmag)),
+            "field_line_b_modulation": modulation,
             "closure_residual": closure_residual,
             "axis_arc_length": axis.arc_length,
             "L_ref": effective_minor_radius,
+            "R_major": effective_major_radius,
             "B_ref": b_reference,
             "u": u_eval,
             "fieldline_theta": theta_eval,

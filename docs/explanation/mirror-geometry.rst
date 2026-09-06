@@ -847,11 +847,14 @@ Two related quantities elsewhere in VMEX are deliberately *not* mirror ratios.
 :func:`vmex.core.optimize.mirror_ratio` is the ``|B|`` modulation depth
 :math:`(B_{\max}-B_{\min})/(B_{\max}+B_{\min})` on one surface, the QI
 optimization knob, related by :math:`R_m = (1+m)/(1-m)`. And the ``epsilon``
-key of the gyrokinetic flux-tube contract is ``std(|B|)/mean(|B|)``, the VMEX
-convention shared with the toroidal core lane; GS2-family codes mean the
-inverse aspect ratio by that key, which a straight mirror does not have. The
-field-line mirror ratio is exported explicitly as
-``vmex_mirror["field_line_mirror_ratio"]``.
+key of the gyrokinetic flux-tube contract is that same modulation depth taken
+along one field line, in the mirror and the toroidal core lane alike
+(:func:`vmex.core.turbulence.b_modulation_depth`): GS2-family codes mean the
+inverse aspect ratio by the key, which a straight mirror does not have, and
+the depth is exactly that number for GKX's own
+:math:`|B| = B_0/(1+\epsilon\cos\theta)` model. The field-line mirror ratio
+:math:`(1+\epsilon)/(1-\epsilon)` is exported explicitly as
+``vmex_mirror["field_line_mirror_ratio"]``; see :doc:`mirror-gyrokinetics`.
 
 Interpreting beta
 -----------------

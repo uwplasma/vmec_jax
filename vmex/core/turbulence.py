@@ -76,6 +76,18 @@ Scope notes
   ``psi = s * psi_edge`` in vmex's internal (signed) edge-flux
   convention.  The default single-``kx`` proxies (``nx = 1``) are
   insensitive to this overall sign, matching GKX's own VMEC bridge.
+- The scalar metadata ``epsilon`` and ``R0`` carry GKX's meaning of those
+  keys -- the meaning it applies when it writes run artifacts
+  (``aminor = epsilon * R0``, ``a_ref``, ``rmaj``) and in its analytic model
+  ``|B| = B0 / (1 + epsilon cos theta)``.  ``epsilon`` is the field-line
+  ``|B|`` modulation depth ``(max|B| - min|B|) / (max|B| + min|B|)``
+  (:func:`b_modulation_depth`): exactly that model's ``epsilon``, and the
+  local inverse aspect ratio ``r / R0`` of a ``1/R`` tokamak field.  ``R0``
+  is the wout ``Rmajor_p`` (``volume_p / (2 pi <area>)``, metres), not
+  ``L_ref``.  :func:`vmex.mirror.gk_closed_fieldline_geometry` exports the
+  same two definitions (there ``R0 = L_axis / (2 pi)``, the same volume
+  identity), so the lanes never split on either key.  Neither enters GKX's
+  solver.  ``std(|B|) / mean(|B|)`` is no longer exported under the key.
 """
 
 from __future__ import annotations
@@ -100,6 +112,7 @@ __all__ = [
     "gk_fieldline_geometry",
     "gk_fieldline_geometry_from_wout",
     "flux_tube_geometry",
+    "b_modulation_depth",
     "turbulence_objective_vector",
     "turbulent_growth_rate",
     "quasilinear_flux_proxy",
@@ -223,6 +236,24 @@ def _line_arrays(ctx: dict, j: int, alpha: float, zeta0: float, x: Array):
 # ---------------------------------------------------------------------------
 
 
+def b_modulation_depth(bmag: Array) -> Array:
+    """``(max|B| - min|B|) / (max|B| + min|B|)`` along a sampled field line.
+
+    The ``epsilon`` of the flux-tube contract, shared by
+    :func:`gk_fieldline_geometry` and
+    :func:`vmex.mirror.gk_closed_fieldline_geometry`.  GKX's analytic
+    geometry is ``|B| = B0 / (1 + epsilon cos theta)`` with ``epsilon`` the
+    inverse aspect ratio, and GKX writes ``aminor = epsilon * R0`` into its
+    run artifacts; this depth *is* that ``epsilon`` for that model and for any
+    ``1/R`` field, and, unlike ``r / R0``, it exists on a straight mirror.
+    The field-line mirror ratio is ``max|B| / min|B| = (1 + eps) / (1 - eps)``.
+    Hard max/min, smooth almost everywhere (ties aside) -- the same depth
+    :func:`vmex.core.optimize.mirror_ratio` takes over a whole surface.
+    """
+    bmax, bmin = jnp.max(bmag), jnp.min(bmag)
+    return (bmax - bmin) / (bmax + bmin)
+
+
 def _gk_fieldline_geometry_from_context(
     ctx: dict,
     *,
@@ -243,9 +274,12 @@ def _gk_fieldline_geometry_from_context(
     ``nfp``), all in the GS2/GX normalizations of simsopt
     ``vmec_fieldlines`` with ``L_ref`` the effective minor radius and
     ``B_ref = 2 |psi_edge| / L_ref^2`` (identical to
-    :mod:`vmex.core.stability`).  A ``"vmex"`` sub-dict carries
-    diagnostics used by the parity tests (``dp_drho``, ``gradpar_profile``,
-    the sampled PEST angles, …).  Pure jnp — traceable and differentiable
+    :mod:`vmex.core.stability`).  ``epsilon`` is the field-line ``|B|``
+    modulation depth (:func:`b_modulation_depth`) and ``R0`` the wout
+    ``Rmajor_p`` in metres -- GKX's meaning of both keys (module notes).  A
+    ``"vmex"`` sub-dict carries diagnostics used by the parity tests
+    (``dp_drho``, ``gradpar_profile``, ``L_ref``/``B_ref``/``R_major``, the
+    sampled PEST angles, …).  Pure jnp — traceable and differentiable
     w.r.t. ``(state, runtime)``; no gkx import.
 
     Parameters
@@ -284,7 +318,7 @@ def _gk_fieldline_geometry_from_context(
     diota = (iotas[j + 1] - iotas[j]) / hs
     dpres = (pres[j + 1] - pres[j]) / hs            # internal units: mu0 dp/ds
     shat = -2.0 * s_j * diota / iota                # (r/q) dq/dr, r = L_ref sqrt(s)
-    L_ref, B_ref = ctx["L_ref"], ctx["B_ref"]
+    L_ref, B_ref, R_major = ctx["L_ref"], ctx["B_ref"], ctx["R_major"]
     psi_edge, sign_psi = ctx["psi_edge"], ctx["sign_psi"]
     alpha_c = jnp.asarray(alpha, dtype=dtype)
     zeta0_c = jnp.asarray(zeta0, dtype=dtype)
@@ -326,7 +360,6 @@ def _gk_fieldline_geometry_from_context(
     bgrad = L_ref * b_dot_gradb / (modB * modB)           # b . grad ln|B|, normalized
     grho = L_ref * jnp.sqrt(gss) / (2.0 * sqrt_s)         # |grad rho| L_ref, rho = sqrt(s)
 
-    mean_b = jnp.mean(bmag)
     return {
         "theta": theta,
         "gradpar": gradpar,
@@ -343,8 +376,8 @@ def _gk_fieldline_geometry_from_context(
         "grho": grho,
         "q": 1.0 / jnp.abs(iota),
         "s_hat": shat,
-        "epsilon": jnp.std(bmag) / mean_b,
-        "R0": L_ref,
+        "epsilon": b_modulation_depth(bmag),
+        "R0": R_major,
         "B0": B_ref,
         "alpha": float(alpha),
         "nfp": int(nfp),
@@ -357,6 +390,7 @@ def _gk_fieldline_geometry_from_context(
             "dp_drho": 2.0 * sqrt_s * dpres / (B_ref * B_ref),
             "L_ref": L_ref,
             "B_ref": B_ref,
+            "R_major": R_major,
             "psi_edge": psi_edge,
             "sign_psi": sign_psi,
             "theta_pest": alpha_c + x_eval,
@@ -432,6 +466,9 @@ def _wout_ballooning_context(wout: Any) -> dict:
     L_ref = float(wout.Aminor_p)
     if not np.isfinite(L_ref) or L_ref <= 0.0:
         raise ValueError(f"WOUT Aminor_p must be finite and positive, got {L_ref}")
+    R_major = float(wout.Rmajor_p)
+    if not np.isfinite(R_major) or R_major <= 0.0:
+        raise ValueError(f"WOUT Rmajor_p must be finite and positive, got {R_major}")
     psi_edge = float(np.asarray(wout.phi, dtype=float)[-1]) / (2.0 * np.pi * signgs)
     if not np.isfinite(psi_edge) or psi_edge == 0.0:
         raise ValueError(f"WOUT edge toroidal flux must be finite and nonzero, got {psi_edge}")
@@ -455,6 +492,7 @@ def _wout_ballooning_context(wout: Any) -> dict:
         "sign_psi": jnp.asarray(np.sign(psi_edge)),
         "L_ref": jnp.asarray(L_ref),
         "B_ref": jnp.asarray(2.0 * abs(psi_edge) / (L_ref * L_ref)),
+        "R_major": jnp.asarray(R_major),
     }
 
 

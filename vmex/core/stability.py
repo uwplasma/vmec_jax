@@ -643,9 +643,10 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
     full mesh (``lmns`` rescaled by ``lamscale/phipf`` exactly as the wout
     writer does), the half-mesh ``iota``/pressure profiles (the ``ncurr = 1``
     current-constrained iota comes from the solved ``chips``, as in
-    ``add_fluxes.f90``), and the GX/GS2-style normalizations ``L_ref``
+    ``add_fluxes.f90``), the GX/GS2-style normalizations ``L_ref``
     (effective minor radius, ``aspectratio.f`` quadrature) and
-    ``B_ref = 2|ψ_edge|/L_ref²``.
+    ``B_ref = 2|ψ_edge|/L_ref²``, and ``R_major`` (the wout ``Rmajor_p``,
+    same quadrature; the ``R0`` of the :mod:`vmex.core.turbulence` contract).
 
     Asymmetric (``lasym``) states additionally carry the sine-parity partners
     ``rmns``/``zmnc``/``lmnc``; they are ``None`` for symmetric states, which
@@ -686,14 +687,20 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
         lmnc = jnp.asarray(state.L_cos) * mode_scale[None, :] * lam_factor[:, None]
 
     # Normalizations: L_ref = Aminor_p (aspectratio.f boundary quadrature,
-    # same math as the wout ``Aminor_p``), B_ref = 2|psi_edge|/L_ref^2.
+    # same math as the wout ``Aminor_p``), B_ref = 2|psi_edge|/L_ref^2, and
+    # R_major = Rmajor_p = volume_p / (2 pi <area>) from the same quadrature
+    # (statephysics._aspect_scalars): the flux-tube contract's ``R0``.
     sqrts_edge = jnp.asarray(setup.sqrts)[-1]
     rb = jnp.asarray(geometry.R_even)[-1] + sqrts_edge * jnp.asarray(geometry.R_odd)[-1]
     zub = (jnp.asarray(geometry.dZ_dtheta_even)[-1]
            + sqrts_edge * jnp.asarray(geometry.dZ_dtheta_odd)[-1])
     wint = jnp.asarray(rt.trig.wint)
-    area = 2.0 * jnp.pi * jnp.abs(jnp.sum(rb * zub * wint))
-    L_ref = jnp.sqrt(jnp.where(area != 0.0, area, 1.0) / jnp.pi)
+    t1 = rb * zub * wint
+    area = 2.0 * jnp.pi * jnp.abs(jnp.sum(t1))
+    area_safe = jnp.where(area != 0.0, area, 1.0)
+    L_ref = jnp.sqrt(area_safe / jnp.pi)
+    volume_p = 2.0 * jnp.pi ** 2 * jnp.abs(jnp.sum(rb * t1))
+    R_major = volume_p / (2.0 * jnp.pi * area_safe)
 
     hs = s[1] - s[0]
     psi_edge = hs * jnp.sum(phipf[1:])          # internal psi = phi/(2 pi)
@@ -708,7 +715,7 @@ def _ballooning_context(state: SpectralState, rt: SolverRuntime) -> dict:
         rmns=rmns, zmnc=zmnc, lmnc=lmnc, lasym=lasym,
         iotas=iotas, pres=jnp.asarray(fields.pressure),
         phipf=phipf, psi_edge=psi_edge, sign_psi=sign_psi,
-        L_ref=L_ref, B_ref=B_ref,
+        L_ref=L_ref, B_ref=B_ref, R_major=R_major,
     )
 
 

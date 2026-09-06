@@ -74,16 +74,23 @@ def test_closed_mirror_contract_is_periodic_equal_arc_and_positive(closed_mirror
         rtol=1.0e-14,
     )
     assert field_line_ratio > 1.5
-    # "epsilon" keeps the VMEX std/mean contract and is NOT the GS2/GX inverse
-    # aspect ratio; the tokamak-equivalent modulation depth is exported apart.
+    # "epsilon" is the field-line |B| modulation depth, the one definition
+    # shared with the core lane (GKX's own bmag = 1/(1 + eps cos theta) has
+    # exactly this eps); the VMEX-named diagnostic repeats it, and the
+    # field-line mirror ratio is (1 + eps) / (1 - eps).
     modulation = float(mapping["vmex_mirror"]["field_line_b_modulation"])
     np.testing.assert_allclose(modulation, (field_line_ratio - 1.0) / (field_line_ratio + 1.0), rtol=1.0e-14)
-    np.testing.assert_allclose(
-        float(mapping["epsilon"]),
-        float(np.std(mapping["bmag"]) / np.mean(mapping["bmag"])),
-        rtol=1.0e-14,
-    )
-    assert abs(float(mapping["epsilon"]) - modulation) > 1.0e-3
+    assert float(mapping["epsilon"]) == modulation
+    assert 0.0 < modulation < 1.0
+    # Not the former std/mean export, which is ~eps/sqrt(2) for a cosine-like
+    # modulation and never equal to the depth on a non-uniform line.
+    assert abs(float(np.std(mapping["bmag"]) / np.mean(mapping["bmag"])) - modulation) > 1.0e-3
+    # R0 is the effective major radius L_axis / (2 pi) (= V / (2 pi^2 L_ref^2)),
+    # not L_ref, so GKX's derived aminor = epsilon * R0 is a length in metres.
+    meta = mapping["vmex_mirror"]
+    np.testing.assert_allclose(float(mapping["R0"]), float(meta["axis_arc_length"]) / (2.0 * np.pi), rtol=1.0e-14)
+    assert float(meta["R_major"]) == float(mapping["R0"])
+    assert float(mapping["R0"]) > float(meta["L_ref"]) > 0.0
     assert abs(float(mapping["vmex_mirror"]["closure_residual"])) < 1.0e-12
     assert mapping["s_hat"] == 0.0
 
