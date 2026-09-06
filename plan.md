@@ -555,8 +555,9 @@ Sphinx HTML, linkcheck, 59 guard tests and seven figure-provenance tests.
 The README Python solve/gradient/optimization/export walkthrough ran on the
 bundled circular tokamak and converged in three optimization evaluations.
 The standalone 19 performance-record tests also passed (included in the
-59 guards, not additional distinct tests). The final PR is recorded below
-before handoff. All authored commits use `rogeriojorge`.
+59 guards, not additional distinct tests). Planning commit `814af87a` is published in
+[PR #282](https://github.com/uwplasma/vmex/pull/282); CI/review are pending at
+handoff. No merge, release or production solver implementation was performed. All authored commits use `rogeriojorge`.
 
 Raw logs, native outputs, isolated environment and the two short review probes
 are in `/Users/rogeriojorge/local/vmex-review-evidence-20260906`; the compact
