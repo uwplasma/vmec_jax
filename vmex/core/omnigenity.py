@@ -236,7 +236,74 @@ def boozer_spectrum_high_order(
     ntheta: int | None = None,
     nzeta: int | None = None,
 ) -> dict[str, Array]:
-    """Transform continuous native surfaces with BOOZ_XFORM_JAX in memory."""
+    """Boozer ``|B|`` spectrum of a continuous high-order state, traceable.
+
+    The continuous-state counterpart of :func:`boozer_spectrum_state`.  Where
+    that route reads the solver's discrete radial mesh and can only evaluate
+    *half-mesh* surfaces, this one takes a
+    :class:`~vmex.core.strong_force.HighOrderEquilibriumState` — the spline
+    reconstruction produced by
+    :func:`~vmex.core.strong_force.lift_high_order_state` or
+    :func:`~vmex.core.strong_force.high_order_state_from_wout` — and evaluates
+    *any* surface exactly, with no radial mesh, no interpolation, and no
+    snapping.
+
+    Per requested surface,
+    :func:`~vmex.core.boozer_tables.high_order_boozer_input_tables` builds the
+    wout-convention input tables at ``rho = sqrt(s)``: the geometry harmonics
+    come straight from the spline coefficients, while ``|B|`` and the
+    covariant field are Fourier-projected from the analytic field evaluator on
+    a uniform ``(theta, zeta)`` grid.  ``booz_xform_jax``'s jittable kernel
+    then performs the Boozer construction itself.  The whole chain is
+    jit/grad-transparent — ``jax.grad`` through a returned ``bmnc_b`` entry
+    back to the state's spline coefficients is exercised by the test suite.
+
+    Parameters
+    ----------
+    state:
+        Continuous reconstruction to transform.  Only its spectral tables,
+        radial basis, ``m``/``n`` mode lists, ``nfp``, and ``phipf``/``chipf``
+        are read.
+    surfaces:
+        Normalized toroidal flux values ``s = psi/psi_edge``, each in
+        ``(0, 1]``; ``s = 0`` (the magnetic axis) and ``s > 1`` are rejected
+        with :exc:`ValueError`.  Scalars are promoted to a one-element array.
+        Values are used verbatim — unlike :func:`boozer_spectrum_state`, they
+        are never snapped to a mesh.
+    mboz, nboz:
+        Poloidal and toroidal Boozer mode bounds.  They fix the output mode
+        list ``(xm_b, xn_b)`` and, with it, booz_xform's angle-transform
+        quadrature at ``2*(2*mboz+1)`` by ``2*(2*nboz+1)`` points.
+    asym:
+        Whether to run the transform's non-stellarator-symmetric branch.  The
+        sine families are always handed to the kernel, but the kernel consumes
+        them only when this is true; with the default ``False`` the returned
+        ``bmns_b`` block is zero.  Set it for a state whose sine tables carry
+        real content.
+    ntheta, nzeta:
+        Size of the uniform angular grid used to project ``|B|`` and the
+        covariant field onto the Nyquist mode set — *not* the Boozer
+        quadrature, which ``mboz``/``nboz`` set.  Both angles are in radians;
+        ``theta`` spans ``[0, 2*pi)`` and ``zeta`` spans one field period.
+        Defaults are ``max(12, 2*(max_m + 1))`` and ``max(8, 2*(max_n + 1))``
+        from the state's own mode set; a grid too coarse to resolve that set
+        raises.
+
+    Returns
+    -------
+    A dict with ``bmnc_b`` and ``bmns_b`` of shape ``(nsurf, nmodes)`` in T,
+    the mode lists ``xm_b``/``xn_b`` as ``numpy`` float arrays with ``xn_b``
+    in physical units (already multiplied by ``nfp``), the per-surface
+    ``iota_b``, the Boozer covariant coefficients ``G_b`` (``B_zeta``) and
+    ``I_b`` (``B_theta``) in T m, the integer ``nfp``, and ``s_b`` — the
+    requested ``surfaces`` themselves.  Note the difference from
+    :func:`boozer_spectrum_state`: there is no ``psi_b``/``psi_edge`` here,
+    and ``G_b``/``I_b`` are the transform's own ``bvco_b``/``buco_b`` rather
+    than the input tables' values.
+
+    ``bmnc_b``, ``bmns_b``, ``xm_b``, ``xn_b``, ``iota_b`` and ``nfp`` are
+    exactly the inputs :func:`omnigenity_residual` expects.
+    """
 
     from booz_xform_jax.jax_api import (
         booz_xform_jax_impl,
@@ -355,9 +422,10 @@ def boozer_spectrum_state(
 def boozer_bmnc_state(*args, **kwargs) -> dict[str, Array]:
     """Deprecated alias of :func:`boozer_spectrum_state`.
 
-    Same signature and return contract (including the ``bmns_b`` block).
-    The name changed when the in-repo symmetric FFT transform was retired in
-    favor of booz_xform_jax's kernel for both parities.
+    Emits a :exc:`DeprecationWarning`, then forwards ``*args``/``**kwargs``
+    unchanged.  Same signature and return contract (including the ``bmns_b``
+    block).  The name changed when the in-repo symmetric FFT transform was
+    retired in favor of booz_xform_jax's kernel for both parities.
     """
     warnings.warn(
         "vmex.core.omnigenity.boozer_bmnc_state is deprecated; call "
@@ -367,7 +435,17 @@ def boozer_bmnc_state(*args, **kwargs) -> dict[str, Array]:
 
 
 def boozer_bmnc_high_order(*args, **kwargs) -> dict[str, Array]:
-    """Deprecated alias of :func:`boozer_spectrum_high_order`."""
+    """Deprecated alias of :func:`boozer_spectrum_high_order`.
+
+    Emits a :exc:`DeprecationWarning` on every call, then forwards ``*args``
+    and ``**kwargs`` unchanged and returns that function's result verbatim —
+    the same dict of ``bmnc_b``/``bmns_b``, ``xm_b``/``xn_b``, ``iota_b``,
+    ``G_b``/``I_b``, ``nfp`` and ``s_b``.  Signature and return contract are
+    identical, so migrating is a rename: call
+    :func:`boozer_spectrum_high_order`.  The old name understates what comes
+    back, which is the whole spectrum including the ``bmns_b`` block, not a
+    ``bmnc`` table.
+    """
     warnings.warn(
         "vmex.core.omnigenity.boozer_bmnc_high_order is deprecated; call "
         "boozer_spectrum_high_order (identical signature and return "
@@ -416,9 +494,62 @@ def omnigenity_residual(
     - ``squash``: pointwise ``envelope - |B|`` monotonicity defect —
       one magnetic well per field period.
 
-    All three vanish on an exactly QI field.  ``softness`` is the sigmoid
-    level width in normalized ``|B|`` units.  Returns ``residuals1d`` (flat
-    least-squares vector), ``total = sum(residuals1d**2)`` and diagnostics.
+    All three vanish on an exactly QI field.
+
+    Parameters
+    ----------
+    bmnc_b:
+        Cosine Boozer ``|B|`` harmonics in T, shape ``(nsurf, nmodes)``,
+        indexed by the ``(m, n)`` pairs of ``xm_b``/``xn_b``.  Promoted to
+        float64.
+    bmns_b:
+        The sine partner, same shape.  ``None`` (the default) means a
+        stellarator-symmetric field and is treated as zeros.
+    xm_b, xn_b:
+        Boozer poloidal and toroidal mode numbers, shape ``(nmodes,)``.
+        ``xn_b`` is in physical units — already multiplied by ``nfp``, as
+        :func:`boozer_spectrum_state` and
+        :func:`boozer_spectrum_high_order` return it.
+    iota_b:
+        Rotational transform on each surface, shape ``(nsurf,)``,
+        dimensionless.  It sets the field-line slope
+        ``theta_B = alpha + iota * phi_B``.
+    nfp:
+        Number of field periods; fixes the sampled ``phi_B`` interval to one
+        period, ``[0, 2*pi/nfp)``.
+    weights:
+        One weight per surface, length ``nsurf``.  Its square root multiplies
+        every residual entry of that surface, so a weight enters the objective
+        linearly.  Default: all ones.
+    nphi:
+        Periodic samples of ``phi_B`` across the field period (radians), at
+        least 8.
+    nalpha:
+        Field-line labels ``alpha``, uniform on ``[0, 2*pi)`` (radians), at
+        least 2.  The residual's field-line averages are means over this axis.
+    n_levels:
+        Trapping levels ``B*`` at which the bounce distance is measured,
+        placed strictly inside the normalized ``[0, 1]`` range, at least 2.
+    softness:
+        Width of the sigmoid that replaces the sharp ``|B| < B*`` occupancy,
+        in *normalized* ``|B|`` units (each surface is rescaled to ``[0, 1]``
+        by its own extrema, so this is a fraction of the surface's ``|B|``
+        span).  Floored at machine epsilon.
+    well_weight, extremum_weight, squash_weight:
+        Multipliers on the three residual blocks.  Setting one to zero keeps
+        the block's entries in the vector but zeroes them.
+
+    Returns
+    -------
+    A dict whose ``residuals1d`` is the flat least-squares vector (the three
+    blocks concatenated, each divided by the square root of its own entry
+    count so the blocks stay comparable) and whose ``total`` is
+    ``sum(residuals1d**2)``.  The remaining keys are diagnostics on the
+    sampling grid: ``bhat`` ``(nsurf, nalpha, nphi)``, the normalized ``|B|``;
+    ``delta`` ``(nsurf, nalpha, n_levels)``, the bounce distance in
+    field-period fractions; ``line_min``/``line_max`` ``(nsurf, nalpha)``;
+    and the grids ``levels`` ``(n_levels,)``, ``phi`` ``(nphi,)``,
+    ``alpha`` ``(nalpha,)``.
     """
     bmnc_b = jnp.asarray(bmnc_b, dtype=jnp.float64)
     bmns_b = (jnp.zeros_like(bmnc_b) if bmns_b is None
@@ -522,6 +653,27 @@ class QIResidual:
     Gauss-Newton geometry, exact implicit gradients).  Use
     :class:`vmex.core.qi.ConstructedQIResidual` when the optimized quantity
     must be the full squash-and-shuffle distance.
+
+    Parameters
+    ----------
+    surfaces:
+        Normalized toroidal flux values ``s = psi/psi_edge`` to evaluate.
+        Each is snapped to the nearest half-mesh surface by
+        :func:`boozer_spectrum_state`; duplicates are kept.
+    weights:
+        One weight per surface (same length as ``surfaces``), or ``None`` for
+        uniform weighting.  Validated at construction.
+    mboz, nboz, oversample:
+        Boozer resolution passed straight to :func:`boozer_spectrum_state`:
+        the poloidal and toroidal mode bounds, and the integer refinement of
+        booz_xform's pinned angle-transform quadrature.
+    nphi, nalpha, n_levels, softness:
+        Field-line sampling of :func:`omnigenity_residual` — points per field
+        period, field-line labels, trapping levels, and the sigmoid width in
+        normalized ``|B|`` units.
+    well_weight, extremum_weight, squash_weight:
+        Multipliers on the bounce-distance, extremum-alignment, and
+        single-well blocks of that residual.
 
     Example::
 

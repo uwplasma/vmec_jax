@@ -157,7 +157,13 @@ line-length = 120
 # Ruff 0.16 changed its implicit default from the classic Pyflakes/pycodestyle
 # baseline to every stable rule.  Keep VMEX's existing lint contract explicit
 # so an unpinned developer-tool upgrade cannot reclassify the whole repository.
-select = ["E4", "E7", "E9", "F"]
+# D101/D102/D103: every public class, method, and function in the ``vmex``
+#        package carries a docstring (pydocstyle visibility: names without a
+#        leading underscore, honoring a module's ``__all__``; closures and
+#        methods of private classes are not public).  The package was at zero
+#        violations when this was enabled; the API reference renders these
+#        docstrings, so a missing one is a documentation regression.
+select = ["E4", "E7", "E9", "F", "D101", "D102", "D103"]
 # E402: module-level import not at top-of-file.  Deferred imports (after env
 #        setup / jax.config calls) are deliberate to control JAX initialisation.
 # E501: line too long.  Handled by the line-length setting above; long lines in
@@ -165,6 +171,14 @@ select = ["E4", "E7", "E9", "F"]
 # E702: semicolons as statement separators in tightly coupled numerical
 #        kernels, common in ported Fortran code.
 ignore = ["E402", "E501", "E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# The docstring contract is on the package's public surface only.
+"tests/**" = ["D"]
+"examples/**" = ["D"]
+"benchmarks/**" = ["D"]
+"tools/**" = ["D"]
+"docs/**" = ["D"]
 
 [tool.mypy]
 # Note: recent numpy stubs use PEP 695 `type` statements, so the checked

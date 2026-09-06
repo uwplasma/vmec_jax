@@ -23,6 +23,26 @@ class EquilibriumReporter:
     either the ``function(equilibrium)`` or ``function(state, runtime)``
     convention used by VMEX objectives.  Calling the reporter prints one line
     and returns the values by label, so scripts can also reuse a final metric.
+
+    Parameters
+    ----------
+    *quantities:
+        One ``(label, function, format_spec)`` triple per reported column;
+        at least one is required and the labels must be unique.  ``label``
+        names the column and keys the returned mapping.  ``function`` is
+        dispatched on its signature: a callable whose second positional
+        parameter has no default is called as ``function(state, runtime)``
+        (the VMEX objective convention), every other callable as
+        ``function(equilibrium)``.  It must return exactly one scalar; any
+        other size raises :exc:`ValueError`.  ``format_spec`` is a
+        :func:`format` specification applied to that float, for example
+        ``".6e"``.
+    stream:
+        Where the report line is written.  The default is ``sys.stdout``;
+        pass ``None`` to compute and return the values without printing.
+    separator:
+        Text placed between the ``label = value`` fields of the printed
+        line.
     """
 
     def __init__(
@@ -62,7 +82,23 @@ class EquilibriumReporter:
         return float(array.reshape(()))
 
     def __call__(self, label: str, equilibrium: Any) -> dict[str, float]:
-        """Evaluate, optionally print, and return the configured quantities."""
+        """Evaluate, optionally print, and return the configured quantities.
+
+        Parameters
+        ----------
+        label:
+            Row tag printed in square brackets before the fields, for
+            example the continuation stage or ``"final"``.
+        equilibrium:
+            The object passed to the quantity callables.  Callables using
+            the ``(state, runtime)`` convention read ``equilibrium.state``
+            and ``equilibrium.runtime``.
+
+        Returns
+        -------
+        Mapping from each configured label to its float value, in the order
+        the quantities were given.
+        """
         values = {name: self._value(function, equilibrium)
                   for name, function, _format in self.quantities}
         if self.stream is not None:
@@ -75,7 +111,56 @@ class EquilibriumReporter:
 
 @dataclass(frozen=True)
 class OptimizationRecord:
-    """One optimizer callback, normally one accepted iteration."""
+    """One optimizer callback, normally one accepted iteration.
+
+    Produced by :meth:`OptimizationMonitor.record` and stored in
+    :attr:`OptimizationMonitor.records`.  Every field is a plain host value;
+    a field is ``None`` when the optimizer callback did not supply it and the
+    monitor could not derive it, never zero-as-unknown.
+
+    Attributes
+    ----------
+    iteration:
+        Iteration index of this accepted iterate.  Taken from the SciPy
+        result's ``nit`` when present, otherwise the number of records
+        already held.  Optimizers restart their counter at every
+        continuation stage, so a repeated or decreasing value is bumped to
+        one past the previous record; the sequence in one monitor is always
+        strictly increasing.
+    cost:
+        Total scalar objective at this iterate.  For a least-squares
+        problem this is ``0.5 * r @ r`` over the full residual vector, so
+        it matches SciPy's ``OptimizeResult.cost``; for a scalar objective
+        it is the objective value itself.  Units are those of the weighted
+        objective (dimensionless for the usual normalised VMEX terms).
+    reduction:
+        ``previous cost - this cost``, positive when the step improved the
+        objective.  ``None`` for the first record, which has no
+        predecessor.
+    optimality:
+        First-order optimality measure of the gradient.  SciPy's own
+        ``optimality`` is used when the callback provides it; otherwise it
+        is the infinity norm of a callback-supplied ``jac``, or the
+        Euclidean norm of the gradient cached by
+        :meth:`OptimizationMonitor.cache_evaluation`.  ``None`` when no
+        gradient information reached the monitor.
+    equilibrium_solves:
+        Cumulative number of forward VMEC equilibrium solves performed for
+        this problem's implicit configuration, read from the solver's own
+        counters without re-evaluating the objective.  ``None`` when the
+        monitor was built without a ``problem`` or the problem carries no
+        implicit configuration (for example a finite-difference or
+        wout-only problem).
+    rejected_trials:
+        Cumulative number of optimizer trial points whose equilibrium solve
+        failed and was replaced by the smooth rejection cost.  ``None``
+        under the same conditions as ``equilibrium_solves``.
+    terms:
+        Per-term weighted costs by label, ``0.5 * r_k @ r_k`` over each
+        named residual slice of the problem, so the values sum to ``cost``
+        for a pure least-squares problem.  Empty when the problem exposes
+        no term slices and the caller supplied none.
+    """
 
     iteration: int
     cost: float
@@ -97,6 +182,26 @@ class OptimizationMonitor:
     The monitor never chooses steps or changes an optimizer.  If ``problem``
     is supplied, VMEX solve/failure counters are read without evaluating the
     objective again.
+
+    Parameters
+    ----------
+    problem:
+        Optional problem the optimizer is running on.  It is used only to
+        read metadata: the named residual slices that split ``cost`` into
+        per-term costs, the cumulative equilibrium-solve and failed-trial
+        counters, and — as a last resort, when a callback carries neither
+        ``cost`` nor ``fun`` — one :meth:`~vmex.core.problem.FunctionProblem.fun`
+        call at the accepted iterate.  With ``None`` those record fields
+        stay ``None`` or empty and the monitor still records everything the
+        callback provides.
+    stream:
+        Where the per-iteration table is written.  The default is
+        ``sys.stdout``; pass ``None`` to record silently and read
+        :attr:`records`, :attr:`history`, or :meth:`save` afterwards.
+    print_every:
+        Print one row every ``print_every`` records (the first record is
+        always printed, together with the header).  Must be at least 1;
+        recording is unaffected.
     """
 
     def __init__(
@@ -309,7 +414,34 @@ class OptimizationMonitor:
         rejected_trials: int | None = None,
         terms: Mapping[str, Any] | None = None,
     ) -> OptimizationRecord:
-        """Append one already-computed accepted iterate and return its record."""
+        """Append one already-computed accepted iterate and return its record.
+
+        Parameters
+        ----------
+        x:
+            The accepted decision vector; a float copy is appended to
+            :attr:`x_history`.
+        cost:
+            Total scalar objective at ``x``.  Nothing is recomputed.
+        optimality:
+            First-order optimality measure, or ``None`` when unknown.
+        iteration:
+            Iteration index; defaults to the number of records already
+            held, and is advanced past the previous record when an
+            optimizer restarts its own counter at a continuation stage.
+        equilibrium_solves, rejected_trials:
+            Cumulative solve and failed-trial counts.  ``None`` (the
+            default) reads them from the monitor's ``problem``, leaving the
+            field ``None`` when no problem was supplied.
+        terms:
+            Per-term weighted costs by label.  ``None`` splits the
+            problem's own residual over its named term slices instead,
+            which may evaluate the residual once at ``x``.
+
+        Returns
+        -------
+        The appended :class:`OptimizationRecord`.
+        """
         if terms is None:
             terms = self._term_costs(np.asarray(x, dtype=float))
         if iteration is None:

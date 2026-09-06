@@ -863,22 +863,29 @@ class GammaC:
             max_wells=self.max_wells, zeta0=self.zeta0)
 
     def residuals_state(self, state: SpectralState, rt: SolverRuntime) -> jnp.ndarray:
+        """Return ``sqrt(weight) * Gamma_c`` per surface (unweighted when ``weights`` is None)."""
         gamma_c = self.compute_state(state, rt)["gamma_c"]
         if self.weights is None:
             return gamma_c
         return jnp.sqrt(jnp.asarray(self.weights, dtype=gamma_c.dtype)) * gamma_c
 
     def total_state(self, state: SpectralState, rt: SolverRuntime) -> Array:
+        """Return the weighted sum of ``Gamma_c**2`` over the surfaces."""
         rows = self.residuals_state(state, rt)
         return jnp.vdot(rows, rows)
 
     def J(self, eq) -> jnp.ndarray:
+        """Residual rows of a converged :class:`~vmex.core.optimize.Equilibrium`.
+
+        Also reachable as ``__call__`` and ``residuals``.
+        """
         return self.residuals_state(eq.state, eq.runtime)
 
     __call__ = J
     residuals = J
 
     def total(self, eq) -> Array:
+        """Scalar cost of a converged :class:`~vmex.core.optimize.Equilibrium`."""
         return self.total_state(eq.state, eq.runtime)
 
 

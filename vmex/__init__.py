@@ -1,54 +1,146 @@
 """vmex: a JAX implementation of VMEC2000 for fixed and free-boundary equilibria.
 
-Public API (lazily imported; ``import vmex as vj``):
+Every name below is a lazy attribute of the top-level package
+(``import vmex as vj``): the owning module is imported on first access, and
+``vmex.__all__`` lists exactly these names plus ``__version__``.  Each entry
+links to the module that documents it.
+
+**Inputs and run controls**
 
 - :class:`~vmex.core.input.VmecInput` — INDATA / VMEC++-JSON input pytree
+- :class:`~vmex.core.run_options.RunOptions` /
+  :class:`~vmex.core.run_options.InputRequest` /
+  :func:`~vmex.core.run_options.read_input_request` — ``!@VMEX`` directives
+  and the JSON ``_vmex`` section (execution metadata, never physics)
+
+**Solvers**
+
 - :func:`~vmex.core.solver.solve` — single-grid fixed-boundary solve
 - :func:`~vmex.core.multigrid.solve_multigrid` — NS_ARRAY ladder (runvmec.f)
-- :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` — free-boundary ladder
+- :func:`~vmex.core.multigrid.solve_file` — run a deck the way the CLI does
+  (directives honored, ``wout_<case>.nc`` written)
 - :func:`~vmex.core.freeboundary.solve_free_boundary` — NESTOR free boundary
-- :func:`~vmex.core.freeboundary_implicit.solve_free_boundary_implicit` —
-  coupled NESTOR/VMEC implicit derivative
-- :func:`~vmex.core.wout.read_wout` / :func:`~vmex.core.wout.write_wout`
-  / :func:`~vmex.core.wout.wout_from_state` / :class:`~vmex.core.wout.WoutData`
+- :func:`~vmex.core.multigrid.solve_free_boundary_multigrid` — free-boundary ladder
+- :func:`~vmex.core.freeboundary_implicit.make_free_boundary_config` /
+  :func:`~vmex.core.freeboundary_implicit.solve_free_boundary_implicit` /
+  :func:`~vmex.core.freeboundary_implicit.solve_free_boundary_implicit_status`
+  — coupled NESTOR/VMEC implicit derivative
 - :func:`~vmex.core.restart.state_from_wout` /
   :func:`~vmex.core.restart.restart_state` — hot restart from any wout
+  (also ``solve*(..., restart_from=...)``)
+
+**Outputs and scaling**
+
+- :class:`~vmex.core.wout.WoutData` / :func:`~vmex.core.wout.read_wout` /
+  :func:`~vmex.core.wout.write_wout` / :func:`~vmex.core.wout.wout_from_state`
 - :func:`~vmex.core.turbulence.gk_fieldline_geometry_from_wout` — GK
   field-line geometry from any compatible wout, without a solve
-  (also ``solve*(..., restart_from=...)``)
+- :func:`~vmex.core.scaling.scale_input` / :func:`~vmex.core.scaling.scale_wout`
+  / :func:`~vmex.core.scaling.scale_mgrid` — dimensional similarity transforms
+
+**High-order reconstruction and strong-force certificate**
+
 - :class:`~vmex.core.strong_force.HighOrderEquilibriumState` /
-  :func:`~vmex.core.strong_force.certify_strong_force` — axis-regular
-  continuous reconstruction and independent strong-force certificate
-- :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
-- :func:`~vmex.core.plotting.plot_optimization_objects` — surfaces and coils
+  :func:`~vmex.core.strong_force.high_order_state_from_wout` /
+  :func:`~vmex.core.strong_force.lift_high_order_state` — axis-regular
+  continuous reconstruction
+- :func:`~vmex.core.strong_force.evaluate_high_order_fields` →
+  :class:`~vmex.core.strong_force.HighOrderFieldSamples`;
+  :func:`~vmex.core.strong_force.evaluate_high_order_surface` →
+  :class:`~vmex.core.strong_force.HighOrderSurfaceSamples`
+- :func:`~vmex.core.strong_force.evaluate_strong_force` →
+  :class:`~vmex.core.strong_force.StrongForceSamples`;
+  :func:`~vmex.core.strong_force.certify_strong_force` →
+  :class:`~vmex.core.strong_force.StrongForceReport` (carrying two
+  :class:`~vmex.core.strong_force.ForceErrorNormalizations`, whole-domain
+  and windowed) /
+  :func:`~vmex.core.strong_force.plot_strong_force_report` — independent
+  strong-force certificate
+- :func:`~vmex.core.omnigenity.boozer_spectrum_state` /
+  :func:`~vmex.core.omnigenity.boozer_spectrum_high_order` — Boozer ``|B|``
+  spectrum without a sampled radial mesh
+  (:func:`~vmex.core.omnigenity.boozer_bmnc_high_order` is a deprecated
+  alias that warns on call)
+
+**Force-balance polishing**
+
+- :class:`~vmex.core.polish_driver.PolishConfig` /
+  :class:`~vmex.core.polish_driver.PolishContext` /
+  :class:`~vmex.core.polish_driver.PolishResult` /
+  :class:`~vmex.core.polish_driver.PolishReport` — strong-root correction
+  (``solve*(..., polish=...)``)
+- :class:`~vmex.core.polish_implicit.PolishLinearConfig` /
+  :func:`~vmex.core.polish_implicit.collocation_polish_tangent` /
+  :func:`~vmex.core.polish_implicit.collocation_polish_adjoint` /
+  :func:`~vmex.core.polish_implicit.implicit_collocation_polished_state`
+  — derivatives through a polished root
+
+**Optimization**
+
+- ``vmex.optimize`` — objectives + least-squares driver (module)
+- ``vmex.implicit`` — implicit differentiation of the equilibrium (module)
+- ``vmex.parallel`` — concurrent ensembles of independent solves (module)
+- :class:`~vmex.core.problem.VmecProblem` /
+  :class:`~vmex.core.problem.FunctionProblem` /
+  :class:`~vmex.core.problem.Evaluation` — optimizer-neutral value,
+  residual, and derivative callables
+- :class:`~vmex.core.monitoring.OptimizationMonitor` /
+  :class:`~vmex.core.monitoring.OptimizationRecord` — accepted iterations;
+  :class:`~vmex.core.monitoring.EquilibriumReporter` — compact diagnostics
+
+**Post-processing and plotting**
+
 - :func:`~vmex.core.boozer.run_booz_xform` — Boozer transform (booz_xform_jax)
-- :func:`~vmex.core.neoclassical.epsilon_effective_from_wout` — optional
+- :func:`~vmex.core.neoclassical.epsilon_effective_from_wout` /
+  :func:`~vmex.core.neoclassical.epsilon_effective_from_boozer` — optional
   NEO_JAX effective-ripple profile
 - :func:`~vmex.core.gammac.gamma_c_from_wout` — fast-ion ``Gamma_c`` profile
   from any compatible wout, without a solve
 - :func:`~vmex.core.tracing.essos_vmec_field` — hand a solved equilibrium to
   ESSOS as an ``essos.fields.Vmec`` (optional ESSOS dependency)
-- :func:`~vmex.core.tracing.trace_alphas` /
+- :func:`~vmex.core.tracing.trace_alphas` →
+  :class:`~vmex.core.tracing.AlphaTracingResult` /
   :func:`~vmex.core.plotting.plot_tracing` — optional ESSOS alpha-particle
   tracing (exact loss fraction; also ``vmex --trace``)
-- :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
-  / :func:`~vmex.core.mgrid.tabulate_cartesian_field`
-  / :class:`~vmex.core.mgrid.MgridField` (mgrid or tabulated direct field;
-  ``MgridField.from_coils`` tabulates an ESSOS coil set)
-- :class:`~vmex.core.extender.VmecInteriorField` — field inside the plasma
-- :class:`~vmex.core.extender.VmecExtender` — field outside the plasma surface
-- :class:`~vmex.core.virtual_casing.PlasmaVacuumInterface` — virtual-casing
-  diagnostics on a prescribed plasma-vacuum interface
-- :func:`~vmex.core.scaling.scale_input` / :func:`~vmex.core.scaling.scale_wout`
-  — dimensional similarity transforms
-- ``vmex.optimize`` — objectives + least-squares driver (module)
-- :class:`~vmex.core.monitoring.OptimizationMonitor` — accepted iterations
-- :class:`~vmex.core.monitoring.EquilibriumReporter` — compact diagnostics
-- ``vmex.implicit`` — implicit differentiation of the equilibrium (module)
-- ``vmex.parallel`` — concurrent ensembles of independent solves (module)
-- ``vmex.errors`` — typed zero-crash exceptions (also exported directly)
+- :func:`~vmex.core.plotting.plot_wout` / :func:`~vmex.core.plotting.plot_boozmn`
+  / :func:`~vmex.core.plotting.plot_bootstrap_current`
+  / :func:`~vmex.core.plotting.plot_optimization_movie`
+  / :func:`~vmex.core.plotting.plot_optimization_objects` — wout, boozmn,
+  bootstrap, optimization-history, and surfaces-and-coils plots
 
-The ``vmec`` console entry point lives in :mod:`vmex.core.cli`.
+**External fields**
+
+- :class:`~vmex.core.mgrid.MgridData` / :class:`~vmex.core.mgrid.MgridField`
+  / :func:`~vmex.core.mgrid.read_mgrid` / :func:`~vmex.core.mgrid.write_mgrid`
+  / :func:`~vmex.core.mgrid.tabulate_cartesian_field` — mgrid or tabulated
+  direct field (``MgridField.from_coils`` tabulates an ESSOS coil set)
+- :class:`~vmex.core.extender.MagneticField` — base JAX field with explicit
+  and stored-point evaluation;
+  :class:`~vmex.core.extender.VmecInteriorField` — field inside the plasma;
+  :class:`~vmex.core.extender.VmecExtender` — field outside the plasma surface
+- :class:`~vmex.core.virtual_casing.PlasmaVacuumInterface` /
+  :func:`~vmex.core.virtual_casing.surface_field_data_from_state` /
+  :func:`~vmex.core.virtual_casing.surface_field_data_from_high_order` /
+  :func:`~vmex.core.virtual_casing.surface_field_data_from_wout` —
+  virtual-casing diagnostics on a prescribed plasma-vacuum interface
+
+**Errors, diagnostics, and modules**
+
+- ``vmex.errors`` — typed zero-crash exceptions (module); also exported
+  directly: :class:`~vmex.core.errors.VmecError`,
+  :class:`~vmex.core.errors.VmecInputError`,
+  :class:`~vmex.core.errors.VmecJacobianError`,
+  :class:`~vmex.core.errors.VmecConvergenceError`,
+  :class:`~vmex.core.errors.VmecNumericalError`,
+  :class:`~vmex.core.errors.MgridNotFoundError`,
+  :class:`~vmex.core.errors.StrongForceContinuationError`,
+  :class:`~vmex.core.errors.StrongForceCertificationError`,
+  :class:`~vmex.core.errors.StrongForceLinearSolveError`
+- ``vmex.doctor`` — installation diagnostics behind ``vmex --doctor`` (module)
+- ``vmex.core`` — the solver internals (module)
+
+The ``vmex`` console entry point (``vmec`` is an alias) lives in
+:mod:`vmex.core.cli`.
 """
 
 from importlib import import_module as _import_module

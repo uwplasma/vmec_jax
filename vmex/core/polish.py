@@ -81,6 +81,10 @@ class HighLowTransfer:
     project_mask: SpectralState | None = None
 
     def low_project(self, value: SpectralState) -> SpectralState:
+        """Project a legacy-packed state onto the evolved degrees of freedom.
+
+        Identity when no projection data is stored.
+        """
         if self.project_config is None:
             return value
         from .implicit import _dof_projector
@@ -88,6 +92,11 @@ class HighLowTransfer:
         return _dof_projector(self.project_config, self.project_mask)(value)
 
     def tree_flatten(self):
+        """Split into traced array leaves and hashable static metadata.
+
+        The mode tables, symmetry flags, and projection config are static:
+        two transfers that differ only in array values share one compile.
+        """
         children = (
             self.evaluation, self.geometry_fit, self.lambda_fit,
             self.mode_scale, self.phipf, self.lamscale, self.project_mask,
@@ -102,6 +111,7 @@ class HighLowTransfer:
 
     @classmethod
     def tree_unflatten(cls, aux, children):
+        """Rebuild from :meth:`tree_flatten` output (JAX pytree protocol)."""
         m, n, lthreed, lasym, lconm1, project_config = aux
         (evaluation, geometry_fit, lambda_fit, mode_scale, phipf, lamscale,
          project_mask) = children
@@ -115,14 +125,17 @@ class HighLowTransfer:
 
     @property
     def mnmax(self) -> int:
+        """Number of ``(m, n)`` modes in the evaluation table."""
         return int(self.evaluation.shape[0])
 
     @property
     def ns(self) -> int:
+        """Number of VMEC radial surfaces the splines are sampled on."""
         return int(self.evaluation.shape[1])
 
     @property
     def nbasis(self) -> int:
+        """Number of radial spline coefficients per mode."""
         return int(self.evaluation.shape[2])
 
     def zeros_high(self, dtype: Any | None = None) -> HighOrderCorrection:
@@ -328,6 +341,7 @@ class StrongRootGroup:
     abs_n: int
 
     def tree_flatten(self):
+        """Split into the traced local basis and static index/block metadata."""
         return (self.basis,), (
             tuple(int(v) for v in np.asarray(self.high_indices).ravel()),
             np.asarray(self.high_indices).shape,
@@ -335,6 +349,7 @@ class StrongRootGroup:
 
     @classmethod
     def tree_unflatten(cls, aux, children):
+        """Rebuild from :meth:`tree_flatten` output (JAX pytree protocol)."""
         indices, shape, start, stop, m, abs_n = aux
         (basis,) = children
         return cls(
@@ -375,19 +390,26 @@ class StrongRootLayout:
     groups: tuple[StrongRootGroup, ...]
 
     def tree_flatten(self):
+        """Split into the traced group tuple and static ``(mnmax, nbasis)``."""
         return (self.groups,), (int(self.mnmax), int(self.nbasis))
 
     @classmethod
     def tree_unflatten(cls, aux, children):
+        """Rebuild from :meth:`tree_flatten` output (JAX pytree protocol)."""
         mnmax, nbasis = aux
         (groups,) = children
         return cls(mnmax=mnmax, nbasis=nbasis, groups=tuple(groups))
 
     @property
     def size(self) -> int:
+        """Number of free root coordinates (end of the last block)."""
         return 0 if not self.groups else int(self.groups[-1].stop)
 
     def pack(self, correction: HighOrderCorrection) -> Array:
+        """Restrict a high-order correction to the free root coordinates.
+
+        Exact transpose of :meth:`unpack`.
+        """
         flat = _flatten_high(correction)
         return jnp.concatenate(
             tuple(
@@ -398,6 +420,10 @@ class StrongRootLayout:
         )
 
     def unpack(self, vector: Array) -> HighOrderCorrection:
+        """Lift free root coordinates to a high-order correction.
+
+        Raises :class:`ValueError` unless ``vector`` has shape ``(size,)``.
+        """
         vector = jnp.asarray(vector)
         if vector.shape != (self.size,):
             raise ValueError(f"free vector has shape {vector.shape}; expected {(self.size,)}")
@@ -446,6 +472,7 @@ class StrongPhysicalChart:
 
     @classmethod
     def tree_unflatten(cls, metadata, children):
+        """Rebuild from :meth:`tree_flatten`; ``build_seconds`` comes back as zero."""
         (gauge_rank,) = metadata
         build_seconds = 0.0
         (
@@ -465,10 +492,12 @@ class StrongPhysicalChart:
 
     @property
     def full_size(self) -> int:
+        """Dimension of the constrained root layout the chart maps into."""
         return int(self.coordinate_basis.shape[0])
 
     @property
     def size(self) -> int:
+        """Number of gauge-free physical coordinates."""
         return int(self.coordinate_basis.shape[1])
 
     def lift(self, vector: Array) -> Array:
@@ -565,6 +594,7 @@ class StrongRootRuntime:
 
     @classmethod
     def tree_unflatten(cls, metadata, children):
+        """Rebuild from :meth:`tree_flatten` output (JAX pytree protocol)."""
         (force_floor,) = metadata
         *children, transfer, low_preconditioner, layout = children
         children = tuple(children)
@@ -701,6 +731,7 @@ class LowOrderPreconditioner:
     factor_build_seconds: float
 
     def tree_flatten(self):
+        """Split into traced leaves; only the canonical config is static."""
         children = (
             self.transfer, self.params, self.frozen_state, self.dof_mask,
             self.factors, self.row_scale, self.column_scale,
@@ -710,6 +741,7 @@ class LowOrderPreconditioner:
 
     @classmethod
     def tree_unflatten(cls, aux, children):
+        """Rebuild from :meth:`tree_flatten`; ``factor_build_seconds`` comes back as zero."""
         (config,) = aux
         (transfer, params, frozen_state, dof_mask, factors, row_scale,
          column_scale, legacy_coordinates, legacy_defect) = children

@@ -236,6 +236,7 @@ class SplineMirrorDiscretization:
 
     @property
     def coefficient_count(self) -> int:
+        """Number of axial B-spline coefficients per poloidal row."""
         return self.spline.size
 
     def evaluate_boundary(self, boundary: SplineMirrorBoundary) -> MirrorBoundary:

@@ -87,6 +87,51 @@ class Evaluation:
     is a short machine-readable value such as ``"success"`` or
     ``"failed_solve"``; ``message`` is intended for a human.  Optimizers use
     the ordinary callable methods and do not need to understand this object.
+
+    Returned by :meth:`FunctionProblem.evaluate` and the two ``compile_*``
+    helpers.  It is a report, not a cache: nothing here is consulted by a
+    later evaluation.
+
+    Attributes
+    ----------
+    x:
+        The decision vector the values were produced at, as an owned float
+        copy with the shape of ``problem.x0``.
+    value:
+        Scalar objective at ``x``.  For a residual-only problem this is the
+        least-squares cost ``0.5 * r @ r``, matching SciPy's
+        ``OptimizeResult.cost``.  ``None`` when the problem exposes neither
+        a scalar objective nor residuals.
+    gradient:
+        Gradient of ``value`` with respect to ``x``, reshaped to ``x``'s
+        shape.  For a residual problem it is ``J.T @ r``.  ``None`` when
+        ``derivatives=False`` was requested or no gradient lane exists.
+    residual:
+        The flattened residual vector ``r(x)``, or ``None`` for a
+        scalar-only problem.
+    jacobian:
+        The residual Jacobian ``dr_i/dx_j`` with shape
+        ``(residual.size, x.size)``, or ``None`` when derivatives were not
+        requested or the problem provides no Jacobian.
+    status:
+        ``"success"``, or — from a VMEC-backed problem —
+        ``"failed_solve"`` when the equilibrium solve at ``x`` raised, and
+        ``"under_converged"`` when it returned but its force residual
+        exceeds the threshold below which implicit derivatives are
+        certified.
+    message:
+        Human-readable explanation, empty on success; the solver
+        exception's text for ``"failed_solve"``.
+    diagnostics:
+        Extra per-evaluation values.  Empty for a plain
+        :class:`FunctionProblem`.  A :class:`VmecProblem` adds the
+        cumulative ``failed_trials`` and ``derivative_fallbacks`` counters,
+        a ``solve_stats`` mapping when the implicit lane recorded one, and
+        — when the equilibrium at ``x`` could be materialised — the summed
+        force residual ``fsq``, its ``fsq_ratio`` to the solve tolerance,
+        the configured ``max_fsq_ratio``, and the boolean
+        ``derivative_certified``.  A failed solve also carries
+        ``exception_type``.
     """
 
     x: np.ndarray
@@ -115,6 +160,92 @@ class FunctionProblem:
 
     This class deliberately does not provide ``solve(method=...)``.  Pass its
     methods directly to the optimizer of choice.
+
+    At least one of ``fun``, ``value_and_grad``, ``residual``, or
+    ``residual_and_jac`` is required; every other callable is optional and
+    the matching method raises :exc:`AttributeError` when its lane is
+    absent.  The host callables receive one contiguous float NumPy array and
+    are free to be opaque; the ``jax_*`` callables receive whatever the
+    caller traces and must stay traceable.
+
+    Two independent one-entry caches, each keyed on the exact bytes of ``x``
+    (shape, dtype, and contents — no tolerance), avoid repeating work across
+    the split calls an optimizer makes at one iterate.  The scalar cache is
+    filled by :meth:`value_and_grad` and so covers ``value_and_grad`` alone,
+    ``fun`` together with ``grad``, or ``residual_and_jac``.  The
+    least-squares cache is filled by :meth:`residual_and_jac` and so covers
+    ``residual_and_jac``, or ``residual`` together with ``residual_jac``.
+    Whether the cache actually pays depends on which callables were
+    supplied: with ``residual_and_jac``, SciPy's separate ``fun(x)`` then
+    ``jac(x)`` calls both route through it and the second is free, whereas
+    separately supplied ``residual`` and ``residual_jac`` are each invoked
+    directly and share nothing.  Cached arrays are copied out, so a caller
+    may mutate what it receives.  The caches are guarded by a re-entrant
+    lock; the ``jax_*`` lane touches no host state and stays safe to trace.
+
+    Parameters
+    ----------
+    x0:
+        Initial decision vector.  Copied to a float array; its size fixes
+        the number of degrees of freedom and the expected Jacobian column
+        count, and its shape is the shape gradients are reshaped to.
+    fun:
+        ``x -> float``, the scalar objective.  Called directly by
+        :meth:`fun` without touching the cache.
+    grad:
+        ``x -> array``, the objective gradient.  Used only in combination
+        with ``fun``; on its own it does not enable :meth:`grad`.
+    value_and_grad:
+        ``x -> (float, array)``.  The preferred scalar lane: it is one call
+        for both quantities and it fills the scalar cache.  The method that
+        serves it is also reachable under SciPy's ``fun_and_grad`` name.
+    residual:
+        ``x -> array``, the least-squares residual vector ``r(x)``.  It is
+        flattened, and defines the scalar objective ``0.5 * r @ r`` when the
+        problem has no scalar lane of its own (no ``fun``, ``grad``, or
+        ``value_and_grad``).
+    residual_jac:
+        ``x -> array``, the Jacobian ``dr_i/dx_j``.  It must have one
+        column per decision variable; anything else raises
+        :exc:`ValueError`.
+    residual_and_jac:
+        ``x -> (array, array)``, the preferred least-squares lane: one call
+        for both, filling the cache that :meth:`residual` and
+        :meth:`residual_jac` then read.  The Jacobian shape is checked
+        exactly against ``(r.size, x0.size)``.
+    jax_fun, jax_value_and_grad, jax_residual, jax_residual_jac:
+        Traceable counterparts of the four callables above, returned
+        unwrapped by the matching ``jax_*`` methods.  They are never
+        cached and never see host state, so they remain usable inside
+        :func:`jax.jit` and :func:`jax.grad`.  ``jax_fun`` falls back to the
+        first element of ``jax_value_and_grad`` when it is not supplied.
+    names:
+        One name per decision variable, in order, surfaced as
+        :attr:`dof_names` for labelling output.  The default is
+        ``x[0], x[1], ...``; a length other than ``x0.size`` raises
+        :exc:`ValueError`.
+    bounds:
+        Box constraints stored verbatim for the optimizer to consume — a
+        SciPy :class:`~scipy.optimize.Bounds`, or a ``(lower, upper)``
+        pair.  This class neither interprets nor enforces them.
+    scales:
+        Positive finite per-variable scale factors with the shape of
+        ``x0``, defaulting to ones.  Like ``bounds`` they are carried, not
+        applied: pass them to the optimizer (SciPy's ``x_scale``).  A
+        non-finite or non-positive entry raises :exc:`ValueError`.
+    metadata:
+        Free-form mapping copied onto the instance.  VMEX-built problems
+        use it to carry the named residual slices, the solver
+        configuration, the mutable solve counters, and the traceable
+        state accessors that :class:`VmecProblem` reads.
+    evaluation_progress:
+        Print an elapsed-time heartbeat around long evaluations.  It stays
+        silent until a call outlives the first interval, so fast calls
+        print nothing.  It wraps the standalone :meth:`residual` and
+        :meth:`residual_jac` calls only, which is where a production deck
+        spends minutes; the combined and scalar lanes are unaffected.
+    report_interval:
+        Seconds between heartbeat lines.  Must be positive.
     """
 
     def __init__(
@@ -415,7 +546,59 @@ class FunctionProblem:
 
 
 class VmecProblem(FunctionProblem):
-    """A :class:`FunctionProblem` backed by a VMEX equilibrium solve."""
+    """A :class:`FunctionProblem` backed by a VMEX equilibrium solve.
+
+    Adds the maps between the optimizer's decision vector and VMEC objects:
+    the input deck, the converged equilibrium, and the boundary coefficient
+    arrays.  It keeps the same optimizer contract as its base class, so the
+    same methods go to SciPy, JAXopt, or Optax unchanged, and it enriches
+    :meth:`evaluate` with the solve and adjoint status of the underlying
+    equilibrium.
+
+    Build one with :meth:`from_tuples`, :meth:`from_loss`, or
+    :meth:`from_input` rather than calling this constructor: they route
+    through ``vmex.core.optimize.make_problem``, which is what assembles the
+    four callables below along with the objective, the derivative lane, the
+    degree-of-freedom names, and the metadata.
+
+    Parameters
+    ----------
+    *args:
+        Forwarded positionally to :class:`FunctionProblem`; in practice the
+        decision vector ``x0``.
+    **kwargs:
+        Forwarded to :class:`FunctionProblem`: the objective callables,
+        ``names``, ``bounds``, ``scales``, and ``metadata``.
+    input_from_x:
+        Required.  ``x -> VmecInput``: a new input deck carrying the
+        boundary coefficients — and the current degrees of freedom, when
+        the problem parameterizes them — of this decision vector.  Nothing
+        is solved.
+    x_from_input:
+        Required.  The inverse, ``VmecInput -> array``: the decision vector
+        that reproduces a given deck, which is the normal starting point of
+        a continuation stage.  :meth:`x_from_input` rejects a result whose
+        shape differs from ``x0``.
+    equilibrium_from_x:
+        Optional ``x -> Equilibrium``, the converged equilibrium at ``x``.
+        Implicit problems return the accepted state the objective already
+        computed rather than cold-solving the boundary again, which matters
+        for strongly shaped boundaries whose cold axis guess can produce a
+        sign-changing initial Jacobian.  ``None`` makes
+        :meth:`equilibrium_from_x` raise :exc:`AttributeError`.  A callable
+        that accepts a ``newton_iterations`` keyword receives it only when
+        the caller asks for something other than the default 10, so a
+        closure without that keyword still works.
+    boundary_from_x:
+        Optional ``x -> tuple of arrays``, the traceable boundary
+        coefficients: ``(rbc, zbs)`` for a stellarator-symmetric input and
+        ``(rbc, zbs, rbs, zbc)`` when ``lasym``.  Each is a full dense
+        INDATA-layout array of shape ``(2 * ntor + 1, mpol)`` indexed
+        ``[n + ntor, m]`` in metres — not the trimmed decision vector — and
+        is a JAX array, so it composes with coil or surface objectives
+        under :func:`jax.grad`.  ``None`` makes :meth:`boundary_from_x`
+        raise :exc:`AttributeError`.
+    """
 
     def __init__(
         self,
@@ -439,19 +622,111 @@ class VmecProblem(FunctionProblem):
         objective_terms: Sequence[tuple[Callable[..., Any], Any, float]],
         **kwargs: Any,
     ) -> "VmecProblem":
-        """Build a VMEC least-squares problem from weighted objective tuples."""
+        """Build a VMEC least-squares problem from weighted objective tuples.
+
+        The README entry point.  Each tuple is ``(function, target,
+        weight)`` and contributes one or more rows to a single residual
+        vector; the rows of all terms are concatenated in the order given
+        and the scalar cost is ``0.5 * r @ r``.  Named row ranges are
+        recorded in the problem metadata, which is what lets
+        :class:`~vmex.core.monitoring.OptimizationMonitor` report per-term
+        costs without re-solving anything.
+
+        Parameters
+        ----------
+        inp:
+            The starting :class:`~vmex.core.input.VmecInput`.  Its boundary
+            supplies the initial decision vector and its resolution and
+            profiles are held fixed apart from the parameterized degrees of
+            freedom.
+        objective_terms:
+            The ``(function, target, weight)`` triples.
+
+            ``function`` is normally a traceable
+            ``function(state, runtime) -> scalar or vector``, evaluated on
+            the converged equilibrium — the two arguments are also spelled
+            ``(equilibrium_state, solver_context)``.  An objective *object*
+            exposing a ``residuals_state`` method may be passed instead
+            (whole instance or bound method), in which case its full
+            pointwise residual vector becomes this term's rows.  Under
+            ``derivative_method="finite_difference"`` a one-argument host
+            callable taking the whole ``Equilibrium`` is accepted too; the
+            implicit lane rejects it, since it cannot be traced.
+
+            ``target`` is the value the term is driven toward, coerced with
+            :func:`float`, so it must be scalar even when ``function``
+            returns a vector — the same target is then subtracted from
+            every row.
+
+            ``weight`` is a non-negative scalar, or a one-dimensional array
+            with one entry per residual row of that term.  Under the
+            default ``weight_semantics="cost"`` it multiplies the squared
+            cost, so the row is ``sqrt(weight) * (function - target)``;
+            with ``weight_semantics="residual"`` the row is
+            ``weight * (function - target)`` and a negative entry is then
+            allowed.
+        **kwargs:
+            Passed through to ``vmex.core.optimize.make_problem``: which
+            boundary modes vary (``max_mode``, ``vary_major_radius``,
+            ``current_dofs``), the derivative lane
+            (``derivative_method``, ``implicit_jacobian_method``,
+            ``jacobian_batch_size``), the forward solve controls, the
+            variable scaling (``use_ess``, ``ess_alpha``, ``bounds``), and
+            ``weight_semantics``.
+
+        Returns
+        -------
+        A :class:`VmecProblem` whose ``residual``/``residual_jac`` pair,
+        ``x0``, and ``scales`` are ready for
+        :func:`scipy.optimize.least_squares`.  A non-finite or empty
+        residual at the initial point raises :exc:`FloatingPointError`
+        rather than starting an optimization that cannot recover.
+        """
         from .optimize import make_problem
         return make_problem(inp, objective_terms=objective_terms, problem_class=cls, **kwargs)
 
     @classmethod
     def from_loss(cls, inp: Any, loss: Callable[..., Any], **kwargs: Any) -> "VmecProblem":
-        """Build a VMEC scalar problem from a traceable state/runtime loss."""
+        """Build a VMEC scalar problem from a traceable state/runtime loss.
+
+        Parameters
+        ----------
+        inp:
+            The starting :class:`~vmex.core.input.VmecInput`, as for
+            :meth:`from_tuples`.
+        loss:
+            ``loss(state, runtime) -> scalar``, evaluated on the converged
+            equilibrium and already carrying its own weights.  It must
+            return a single value: a vector-valued objective belongs in
+            :meth:`from_tuples`, or must be reduced here explicitly.
+            Unlike an ``objective_terms`` entry it is used exactly as
+            written — an object's ``residuals_state`` is never substituted
+            for it.
+        **kwargs:
+            As for :meth:`from_tuples`.
+
+        Returns
+        -------
+        A :class:`VmecProblem` exposing only the scalar lane —
+        :meth:`~FunctionProblem.fun`, :meth:`~FunctionProblem.grad`, and
+        their traceable counterparts — for a gradient optimizer such as
+        BFGS, L-BFGS-B, or Adam.  It provides no residual or Jacobian.
+        """
         from .optimize import make_problem
         return make_problem(inp, loss=loss, problem_class=cls, **kwargs)
 
     @classmethod
     def from_input(cls, inp: Any, **kwargs: Any) -> "VmecProblem":
-        """Parameterize an input for field VJPs without defining an objective."""
+        """Parameterize an input for field VJPs without defining an objective.
+
+        Builds the same machinery as :meth:`from_loss` around an
+        identically zero loss, so there is nothing to minimize.  Use it when
+        what you want is the parameterization itself: the decision vector
+        and its names, :meth:`input_from_x` and :meth:`boundary_from_x`, and
+        the differentiable :meth:`interior_field` and :meth:`exterior_field`
+        with exact VJPs in these degrees of freedom.  ``inp`` and
+        ``**kwargs`` are as for :meth:`from_tuples`.
+        """
         from .optimize import make_problem
 
         return make_problem(

@@ -6,6 +6,11 @@ the open-field-line lane :mod:`vmex.mirror`, grouped as in
 :doc:`/explanation/architecture`. Every docstring names the VMEC2000
 counterpart it ports.
 
+The package docstring of :mod:`vmex.core` is the module map this page follows:
+
+.. automodule:: vmex.core
+   :no-members:
+
 Profiles
 --------
 
@@ -209,9 +214,11 @@ Free boundary
 .. automodule:: vmex.core.virtual_casing
    :members:
 
-``vmex.core.freeboundary_diff`` remains as a compatibility name for this
-prescribed-interface API. It does not differentiate through a moving-boundary
-NESTOR equilibrium solve.
+.. automodule:: vmex.core.freeboundary_diff
+   :no-members:
+
+It re-exports the names above unchanged; it does not differentiate through a
+moving-boundary NESTOR equilibrium solve.
 
 .. automodule:: vmex.core.mgrid
    :members:
@@ -223,6 +230,12 @@ Physics objectives
 ------------------
 
 The objective catalog with usage snippets is :doc:`/reference/objectives`.
+The wout-parity scalar targets (aspect ratio, volume, beta, elongation, iota)
+that the objective modules share live in one place and are re-exported by
+:mod:`vmex.core.optimize`:
+
+.. automodule:: vmex.core.statephysics
+   :members:
 
 .. automodule:: vmex.core.omnigenity
    :members:
@@ -269,10 +282,34 @@ Outputs
 .. automodule:: vmex.core.boozer
    :members:
 
+The differentiable route from a spectral state to a single-surface Boozer
+transform: traceable ``wout``-convention mode tables that ``booz_xform_jax``
+consumes, so ``jax.grad`` flows from boundary coefficients through to
+downstream kinetic codes.
+
+.. automodule:: vmex.core.boozer_tables
+   :members:
+
 Straight-axis mirrors
 ---------------------
 
+.. automodule:: vmex.mirror
+   :no-members:
+
+Collocation bases, geometry, and force kernels first; then the spline
+discretization and the solves built on them; then the exterior vacuum used by
+the free-boundary lane, derivatives, gyrokinetic geometry, and MOUT output.
+
 .. automodule:: vmex.mirror.analytic
+   :members:
+
+.. automodule:: vmex.mirror.basis
+   :members:
+
+.. automodule:: vmex.mirror.geometry
+   :members:
+
+.. automodule:: vmex.mirror.forces
    :members:
 
 .. automodule:: vmex.mirror.splines
@@ -284,10 +321,16 @@ Straight-axis mirrors
 .. automodule:: vmex.mirror.solver
    :members:
 
+.. automodule:: vmex.mirror.exterior
+   :members:
+
 .. automodule:: vmex.mirror.free_boundary
    :members:
 
 .. automodule:: vmex.mirror.implicit
+   :members:
+
+.. automodule:: vmex.mirror.turbulence
    :members:
 
 .. automodule:: vmex.mirror.output
@@ -303,4 +346,9 @@ Errors and CLI
    :members:
 
 .. automodule:: vmex.core.cli
+   :members:
+
+``vmex --doctor`` collects and formats its installation report here.
+
+.. automodule:: vmex.doctor
    :members:

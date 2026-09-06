@@ -32,10 +32,12 @@ class NestorBorderedOperator:
 
     @property
     def shape(self) -> tuple[int, int]:
+        """Square ``(n, n)`` with ``n = plasma_size + vacuum_size``."""
         size = self.plasma_size + self.vacuum_size
         return size, size
 
     def __call__(self, value: Array) -> Array:
+        """Apply the bordered operator to a concatenated ``(plasma, vacuum)`` vector."""
         x = value[:self.plasma_size]
         q = value[self.plasma_size:]
         return jnp.concatenate((

@@ -125,7 +125,30 @@ class RunOptions:
 
 @dataclass(frozen=True)
 class InputRequest:
-    """One parsed input file: the physics and how to run it."""
+    """One parsed input file: the physics and how to run it.
+
+    The result of :func:`read_input_request`, which is the only place VMEX
+    builds one.  It exists because the two halves of a deck have different
+    lifetimes: the physics goes on to the solver unchanged, while the
+    execution options are merged with CLI flags and Python keywords by
+    :func:`resolve_run_options` before anything runs.
+
+    Attributes
+    ----------
+    input:
+        The parsed physics deck, a :class:`~vmex.core.input.VmecInput`.  It
+        carries no execution metadata: ``!@VMEX`` directive lines are
+        Fortran comments to the ``&INDATA`` parser, and the JSON ``_vmex``
+        section is discarded by ``VmecInput.from_json_text``.
+    options:
+        The :class:`RunOptions` read from those same directives or from the
+        JSON ``_vmex`` section.  A deck with no directives yields
+        ``RunOptions()``, i.e. every package default.
+    source:
+        The path the deck was read from, kept so a caller can name outputs
+        or resolve paths relative to the deck.  VMEX itself only records
+        it.
+    """
 
     input: "VmecInput"
     options: RunOptions
@@ -227,7 +250,26 @@ def strip_vmex_json(data: Mapping[str, Any]) -> tuple[dict[str, Any], RunOptions
 
 
 def format_indata_directives(options: RunOptions) -> str:
-    """Serialize non-default options as canonical directive lines."""
+    """Serialize non-default options as canonical directive lines.
+
+    Only the ``!@VMEX KEY = VALUE`` spelling is written; the legacy
+    ``! VMEX: POLISH_FORCE_BALANCE`` form is read but never emitted.  Round
+    trips through :func:`parse_indata_run_options`.
+
+    Parameters
+    ----------
+    options:
+        The options to serialize.  A field equal to its :class:`RunOptions`
+        default (``polish``, ``polish_fail``) or left at ``None`` (the four
+        numeric overrides) is omitted, so an unmodified ``RunOptions()``
+        produces nothing.
+
+    Returns
+    -------
+    The directive lines as one string terminated by a newline, or the empty
+    string when every option is at its default.  Prepend it to ``&INDATA``
+    text: VMEC2000 reads the lines as comments.
+    """
     lines = []
     defaults = RunOptions()
     if options.polish != defaults.polish:
@@ -254,6 +296,28 @@ def read_input_request(path: str | Path) -> InputRequest:
 
     ``VmecInput.from_file`` remains physics-only; this is the entry point the
     CLI and :func:`~vmex.core.multigrid.solve_file` share.
+
+    The format is chosen from the content, not only the name: a ``.json``
+    suffix or a first non-blank character of ``{`` selects the structured
+    JSON reader, anything else the Fortran ``&INDATA`` reader.  The file is
+    read once as UTF-8 and both halves come from that same text, so the
+    physics and the directives can never disagree about which revision was
+    parsed.
+
+    Parameters
+    ----------
+    path:
+        Filesystem path to an ``&INDATA`` deck or a VMEC++-compatible JSON
+        input.
+
+    Returns
+    -------
+    An :class:`InputRequest` holding the physics input, the
+    :class:`RunOptions` parsed from the file, and ``path``.  Pass the
+    options to :func:`resolve_run_options` to apply CLI and Python
+    overrides; a malformed or unknown directive raises
+    :class:`~vmex.core.errors.VmecInputError` here rather than silently
+    running with defaults.
     """
     from .input import VmecInput
 
@@ -290,6 +354,26 @@ def resolve_run_options(
     through the same keywords, so ``CLI > Python > file > default`` reduces to
     one merge.  The source map (``"python"``, ``"file"``, ``"default"`` per
     field) goes into the run report so a surprising activation is traceable.
+
+    Parameters
+    ----------
+    file_options:
+        Options parsed from the deck, normally
+        :attr:`InputRequest.options`.  ``None`` is treated as
+        ``RunOptions()``.
+    polish, polish_tol, polish_fail, polish_degree, polish_max_iter, polish_spans:
+        Explicit overrides, each with the meaning of the matching
+        :class:`RunOptions` field.  ``None`` means "not specified" and
+        leaves the file or default value in place, so an override cannot be
+        used to reset a field back to ``None``.
+
+    Returns
+    -------
+    ``(options, source)``: the merged :class:`RunOptions`, and a mapping
+    from every :class:`RunOptions` field name to ``"python"``, ``"file"``,
+    or ``"default"`` saying which layer supplied it.  A field is credited
+    to ``"file"`` only when the deck's value differs from the package
+    default.
     """
     resolved = file_options if file_options is not None else RunOptions()
     source = {
