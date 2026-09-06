@@ -29,10 +29,19 @@ except ImportError as error:
     ) from error
 
 SURFACES = np.linspace(0.1, 1.0, 6)
-NS, MPOL, NTOR, NITER, FTOL = 25, 5, 5, 4000, 1.0e-10
+# FTOL = 1e-9 rather than 1e-10: measured on this deck at u = 0, the tighter
+# root costs 154 s against 59 s and moves the gradient by 0.6%, while 1e-8
+# is too loose for the adjoint (|grad| 36.7 against 11.2).  The Schur adjoint
+# stays conditioned on the marginally converged roots that a line search
+# visits, where the coupled Krylov solve stalls at 0.66 relative residual.
+NS, MPOL, NTOR, NITER, FTOL = 25, 5, 5, 2000, 1.0e-9
 MAXITER, METHOD, PARAMETER_BOUND = 20, "L-BFGS-B", 1.0
 ASPECT_TARGET, IOTA_FLOOR = 6.0, 0.42
-LENGTH_TARGET, LENGTH_WEIGHT = 3.5, 1.0
+# Coil length is a hinge above a reachable limit, not a target: with
+# LENGTH_TARGET = 3.5 against 5.25 m coils, 0.5*sum((L - 3.5)^2) = 23.598 was
+# 99.998% of the objective against QA at 3.4e-04, so the optimizer only ever
+# fought an unreachable length and the plasma terms were invisible.
+LENGTH_LIMIT, LENGTH_WEIGHT = 5.3, 1.0
 CURVATURE_LIMIT, CURVATURE_WEIGHT = 7.0, 10.0
 COIL_DISTANCE_LIMIT, COIL_DISTANCE_WEIGHT = 0.08, 1.0e3
 OPTIONS = {"maxiter": MAXITER, "maxls": 10, "ftol": 1.0e-12, "gtol": 1.0e-8}
@@ -67,7 +76,8 @@ def field_from_u(u):
 params = im.params_from_input(inp)
 config = vj.make_free_boundary_config(
     inp, BiotSavart(coils0), ns=NS, ftol=FTOL, max_iterations=NITER,
-    adjoint_tol=1.0e-8, field_from_parameters=field_from_u)
+    adjoint_tol=1.0e-8, adjoint_solver="boundary_schur",
+    field_from_parameters=field_from_u)
 solver_context = im.runtime_from_params(params, config.implicit)
 # Floor the profile minimum, not its average: a mean target is satisfiable while
 # an interior surface sits near zero transform, which is what a current-carried
@@ -75,7 +85,8 @@ solver_context = im.runtime_from_params(params, config.implicit)
 # opt.soft_min_abs_iota is the smooth-minimum variant.
 def iota_floor(equilibrium_state, solver_context):
     return jnp.maximum(
-        IOTA_FLOOR - opt.min_abs_iota(equilibrium_state, solver_context), 0.0)
+        IOTA_FLOOR - opt.soft_min_abs_iota(
+            equilibrium_state, solver_context), 0.0)
 
 
 qs = opt.QuasisymmetryRatioResidual(SURFACES, helicity_m=1, helicity_n=0)
@@ -90,7 +101,8 @@ def objective(u):
         residual = opt.residuals_from_tuples(equilibrium_state, solver_context, tuples)
         coils = coils_from_u(u)
         costs = jnp.asarray([
-            0.5 * LENGTH_WEIGHT * jnp.sum((coils.length - LENGTH_TARGET)**2),
+            0.5 * LENGTH_WEIGHT * jnp.sum(
+                jnp.maximum(coils.length - LENGTH_LIMIT, 0.0)**2),
             0.5 * CURVATURE_WEIGHT * jnp.sum(
                 jnp.maximum(coils.curvature - CURVATURE_LIMIT, 0.0)**2),
             0.5 * COIL_DISTANCE_WEIGHT * loss_coil_separation(

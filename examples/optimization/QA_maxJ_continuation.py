@@ -70,7 +70,7 @@ report = opt.EquilibriumReporter(
     ("QS", qs.total, ".4e"), ("aspect", opt.aspect_ratio, ".3f"),
     ("min |iota|", opt.min_abs_iota, ".3f"),
     ("magnetic well", opt.magnetic_well, ".3f"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 # If a RuntimeWarning reports uncertified Jacobian columns, it is expected
 # once the optimizer leaves the seed and needs no action: the shipped

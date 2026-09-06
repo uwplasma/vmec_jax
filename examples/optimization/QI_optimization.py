@@ -71,7 +71,7 @@ report = opt.EquilibriumReporter(
     ("constructed QI", qi.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
     ("mean iota", opt.mean_iota, ".4f"), ("mirror", opt.mirror_ratio, ".4f"),
     ("elongation", opt.max_elongation, ".4f"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 # Optimize for QI in stages, increasing the maximum mode number each time.
 # If a RuntimeWarning reports uncertified Jacobian columns, it is expected

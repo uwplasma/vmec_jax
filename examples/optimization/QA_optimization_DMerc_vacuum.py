@@ -81,7 +81,7 @@ objective_function_terms = [
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
     ("min |iota|", opt.min_abs_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 # Optimize for QA first, then add the pressure-stability proxy locally.
 equilibrium = opt.solve_equilibrium(inp)

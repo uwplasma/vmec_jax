@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -53,6 +54,7 @@ class FreeBoundaryImplicitConfig:
     implicit: im.ImplicitConfig
     field_from_parameters: Callable[[Any], Any]
     adjoint_solver: str = "coupled_gcrot"
+    adjoint_fail: str = "error"
     schur_probe_chunk_size: int = 1
     vacuum_program: Any = None
 
@@ -74,6 +76,7 @@ def make_free_boundary_config(
     adjoint_gcrot_m: int = 30,
     adjoint_gcrot_k: int = 5,
     adjoint_solver: str = "coupled_gcrot",
+    adjoint_fail: str = "error",
     schur_probe_chunk_size: int = 1,
     field_from_parameters: Callable[[Any], Any] | None = None,
     device: Any = AUTO,
@@ -88,7 +91,12 @@ def make_free_boundary_config(
     accelerator host unless the process already pins JAX placement; pass an
     explicit device to override that measured lower-memory default.
     ``adjoint_solver="coupled_gcrot"`` is the certified default;
-    ``"boundary_schur"`` selects the advanced radial-elimination path.
+    ``"boundary_schur"`` selects the advanced radial-elimination path, which
+    stays well conditioned on marginally converged roots where the coupled
+    Krylov solve stalls. ``adjoint_fail="best_effort"`` returns the stalled
+    Krylov solution with a warning instead of raising, so one bad trial in an
+    optimization is a poor search direction the line search rejects rather
+    than a dead run; a non-finite adjoint always raises.
     """
     if not inp.lfreeb:
         raise ValueError("free-boundary implicit differentiation requires LFREEB=T")
@@ -105,6 +113,8 @@ def make_free_boundary_config(
     if adjoint_solver not in {"boundary_schur", "coupled_gcrot"}:
         raise ValueError(
             "adjoint_solver must be 'boundary_schur' or 'coupled_gcrot'")
+    if adjoint_fail not in {"error", "best_effort"}:
+        raise ValueError("adjoint_fail must be 'error' or 'best_effort'")
     if schur_probe_chunk_size < 1:
         raise ValueError("schur_probe_chunk_size must be positive")
     config = FreeBoundaryImplicitConfig(
@@ -112,6 +122,7 @@ def make_free_boundary_config(
         field_from_parameters=(lambda value: value) if field_from_parameters is None
         else field_from_parameters,
         adjoint_solver=adjoint_solver,
+        adjoint_fail=adjoint_fail,
         schur_probe_chunk_size=int(schur_probe_chunk_size),
     )
     return dataclasses.replace(config, vacuum_program=_vacuum_program(config))
@@ -486,13 +497,13 @@ def _solve_bwd_impl(cfg, saved, state_bar):
     elif cfg.adjoint_solver == "boundary_schur":
         lam = _host_boundary_schur_adjoint(
             cfg, z_star, params, field_parameters, frozen, rcon0, zcon0,
-            mask, rhs,
+            mask, rhs, fail=cfg.adjoint_fail,
         )
         residual = _projected_residual(cfg, mask, formulation="raw")
     else:
         lam = _host_adjoint(
             residual, z_star, params, field_parameters, frozen, rcon0, zcon0,
-            rhs, cfg.implicit)
+            rhs, cfg.implicit, fail=cfg.adjoint_fail)
 
     _, parameter_pullback = jax.vjp(
         lambda p, field: residual(
@@ -507,6 +518,7 @@ def _solve_bwd_impl(cfg, saved, state_bar):
 
 def _host_boundary_schur_adjoint(
     cfg, z_star, params, field_parameters, frozen, rcon0, zcon0, mask, rhs,
+    *, fail="error",
 ):
     """Solve the coupled adjoint through an exact edge Schur complement.
 
@@ -759,7 +771,7 @@ def _host_boundary_schur_adjoint(
         # a small correction rather than a cold whole-state Krylov search.
         return _host_adjoint(
             coupled_residual, z_star, params, field_parameters, frozen, rcon0,
-            zcon0, rhs, icfg, x0=solution)
+            zcon0, rhs, icfg, x0=solution, fail=fail)
     return solution
 
 
@@ -850,7 +862,7 @@ def _transpose_matvec(value, z, p, field, base, rcon, zcon, *, residual):
 
 def _host_adjoint(
     residual, z_star, params, field_parameters, frozen, rcon0, zcon0, rhs, cfg,
-    *, x0=None,
+    *, x0=None, fail="error",
 ):
     """Solve one adjoint while reusing a separately compiled JAX matvec.
 
@@ -889,9 +901,18 @@ def _host_adjoint(
     tolerance = float(im._adjoint_acceptance(
         cfg, np.linalg.norm(np.asarray(rhs_flat))))
     if not np.isfinite(residual_norm) or residual_norm > tolerance:
-        im._raise_adjoint_unconverged(
-            cfg, iterations=calls, residual_norm=residual_norm,
-            tolerance=tolerance, method="host GCROT",
+        if fail != "best_effort" or not np.isfinite(residual_norm):
+            im._raise_adjoint_unconverged(
+                cfg, iterations=calls, residual_norm=residual_norm,
+                tolerance=tolerance, method="host GCROT",
+            )
+        warnings.warn(
+            "free-boundary adjoint stalled: residual "
+            f"{residual_norm:.3e} > acceptance {tolerance:.3e} after {calls} "
+            "Krylov iterations; returning the best-effort solution because "
+            "adjoint_fail='best_effort'. The gradient at this point is "
+            "inaccurate; a line search should reject it.",
+            RuntimeWarning, stacklevel=2,
         )
     return unravel(jnp.asarray(solution, dtype=rhs_flat.dtype))
 

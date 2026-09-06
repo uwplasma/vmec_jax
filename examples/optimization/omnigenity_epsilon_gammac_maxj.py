@@ -174,7 +174,7 @@ report = opt.EquilibriumReporter(
     ("maxJ", maximum_j.total, ".4e"), ("aspect", opt.aspect_ratio, ".3f"),
     ("min |iota|", opt.min_abs_iota, ".3f"),
     ("beta", opt.volume_average_beta, ".3%"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 report("seed", equilibrium)
 print_terms("seed", equilibrium)
 before = hard_confinement(equilibrium)
@@ -194,13 +194,12 @@ x0, step = problem.x0, PARAMETER_STEP * problem.scales
 def value_and_gradient(y):
     value, gradient = problem.value_and_grad(x0 + step * y)
     evaluation_costs.append(float(value))
-    return value, step * gradient
+    return monitor.cache_evaluation(x0 + step * y, value, step * gradient)
 
 
 def monitor_y(intermediate_result):
     monitor({"x": x0 + step * intermediate_result.x,
-             "fun": intermediate_result.fun,
-             "jac": value_and_gradient(intermediate_result.x)[1]})
+             "fun": intermediate_result.fun})
 
 
 evaluation_costs = []

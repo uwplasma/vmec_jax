@@ -54,7 +54,7 @@ objective_function_terms = [(qs, 0.0, 1.0), (opt.aspect_ratio, ASPECT_TARGET, 1.
 report = opt.EquilibriumReporter(
     ("QS", qs.total, ".4e"), ("beta", opt.volume_average_beta, ".3%"),
     ("aspect", opt.aspect_ratio, ".3f"), ("iota", opt.mean_iota, ".3f"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 # If a RuntimeWarning reports uncertified Jacobian columns, it is expected
 # once the optimizer leaves the seed and needs no action: the shipped

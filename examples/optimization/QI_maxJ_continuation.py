@@ -100,7 +100,7 @@ report = opt.EquilibriumReporter(
     ("QI", qi.total, ".4e"), ("aspect", opt.aspect_ratio, ".3f"),
     ("iota", opt.mean_iota, ".3f"), ("mirror", opt.mirror_ratio, ".3f"),
     ("magnetic well", opt.magnetic_well, ".3f"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 # First form a vacuum QI basin from the minimal seed. A common physical pitch
 # generally does not exist on the circular seed, so evaluating dJ/ds earlier

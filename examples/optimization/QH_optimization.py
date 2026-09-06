@@ -69,7 +69,7 @@ objective_function_terms = [
 report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
     ("mean iota", opt.mean_iota, ".4f"), ("magnetic well", opt.magnetic_well, ".4f"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 # Optimize for QH in stages, adding the optional stability proxy after stage 1.
 equilibrium = opt.solve_equilibrium(inp)

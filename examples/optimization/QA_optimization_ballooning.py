@@ -68,7 +68,7 @@ report = opt.EquilibriumReporter(
     ("QS total", qs.total, ".6e"), ("aspect", opt.aspect_ratio, ".4f"),
     ("mean iota", opt.mean_iota, ".4f"),
     ("ballooning bound", ballooning, ".4e"))
-monitor = opt.OptimizationMonitor(stream=None)
+monitor = opt.OptimizationMonitor()
 
 equilibrium = opt.solve_equilibrium(inp, verbose=not ci_smoke)
 seed_lambda = worst_lambda(equilibrium)
