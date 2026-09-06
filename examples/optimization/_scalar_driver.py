@@ -60,12 +60,13 @@ def run_scalar_stage(
 
     def value_and_gradient(y):
         value, gradient = problem.value_and_grad(x_from_y(y))
-        return value, step * gradient
+        # The monitor reads cost and optimality back from this cached
+        # evaluation, so the callback below never re-solves the equilibrium.
+        return monitor.cache_evaluation(x_from_y(y), value, step * gradient)
 
     def monitor_y(intermediate_result):
-        x = x_from_y(intermediate_result.x)
-        value, gradient = problem.value_and_grad(x)
-        monitor({"x": x, "fun": value, "jac": gradient})
+        monitor({"x": x_from_y(intermediate_result.x),
+                 "fun": intermediate_result.fun})
 
     initial_value = float(value_and_gradient(np.zeros_like(x0))[0])
     result = minimize(
