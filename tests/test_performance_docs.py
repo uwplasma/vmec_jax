@@ -317,7 +317,7 @@ def test_cross_code_certificates_are_clean_and_comparable() -> None:
     assert normalized["VMEX"] < 0.2 * normalized["VMEC2000"]
 
 
-def test_readme_strong_force_figure_matches_committed_sources() -> None:
+def test_validation_strong_force_figure_matches_committed_sources() -> None:
     metadata = json.loads(
         (ROOT / "benchmarks" / "strong_force_comparison_m4.json").read_text()
     )
@@ -340,6 +340,7 @@ def test_readme_strong_force_figure_matches_committed_sources() -> None:
             assert hashlib.sha256(path.read_bytes()).hexdigest() == source["sha256"]
     tokamak = cases["shaped_tokamak_pressure"]["sources"]
     assert set(tokamak) == {"VMEX", "VMEC2000", "VMEC++", "DESC"}
+    # Preserve the recorded reconstruction ordering; this is not native DESC.
     assert tokamak["VMEX"]["normalized_l2"] < tokamak["DESC"]["normalized_l2"]
 
     stellarator = cases["nfp2_QA_finite_beta"]["sources"]
@@ -350,11 +351,11 @@ def test_readme_strong_force_figure_matches_committed_sources() -> None:
     assert representation["L"] >= 16
     assert representation["M"] >= 10 and representation["N"] >= 10
     assert desc["metrics"]["radial_refinement_difference"] < 1.0e-3
-    # No timing-ratio claims: the README figure policy is accuracy only;
-    # runtime evidence lives in benchmarks/baselines, not in guards.
-    readme = (ROOT / "README.md").read_text()
-    assert metadata["figure"] in readme
-    assert metadata["summary_figure"] in readme
+    # Historical WOUT reconstruction records, not a native solver ranking.
+    # Runtime evidence lives in benchmarks/baselines, not in these guards.
+    evidence = (ROOT / "docs/explanation/validation.md").read_text()
+    assert metadata["figure"].removeprefix("docs/") in evidence
+    assert metadata["summary_figure"].removeprefix("docs/") in evidence
     assert metadata["summary_independent_l2"]["after"] < (
         metadata["summary_independent_l2"]["before"]
     )
@@ -391,7 +392,7 @@ def test_fresh_deck_parity_artifact_is_provenanced_and_cited() -> None:
 
 
 #: The two committed polish force-error records: the shaped tokamak whose
-#: before/after pair the README quotes, and the bundled solovev deck that
+#: before/after pair the validation page quotes, and the bundled solovev deck that
 #: shows what ``eps_F`` looks like when its denominator has collapsed.
 POLISH_FORCE_ERROR_RECORDS = (
     "polish_force_error_2026-09-03.json",
@@ -399,11 +400,11 @@ POLISH_FORCE_ERROR_RECORDS = (
 )
 
 
-def _readme_number(value: float, digits: int = 3) -> str:
-    """Format a measurement the way the README prints it.
+def _prose_number(value: float, digits: int = 3) -> str:
+    """Format a measurement the way the validation page prints it.
 
     ``f"{v:.3e}"`` pads the exponent (``1.284e-02``); prose writes
-    ``1.284e-2``.  Comparing through one formatter keeps the README pinned
+    ``1.284e-2``.  Comparing through one formatter keeps the prose pinned
     to the artifact digit for digit without dictating its typography.
     """
     mantissa, exponent = f"{value:.{digits}e}".split("e")
@@ -487,31 +488,31 @@ def test_solovev_record_shows_the_certificate_at_its_ceiling() -> None:
     assert scales["relative_force_error"] > 100.0
     assert scales["magnetic_normalized_l2"] < 0.1
 
-    readme = (ROOT / "README.md").read_text()
-    assert POLISH_FORCE_ERROR_RECORDS[1] in readme
-    assert f"`{block['pointwise_eps_f']['normalized_l2']:.3f}`" in readme
-    assert f"`{_readme_number(scales['magnetic_normalized_l2'], 2)}`" in readme
-    assert f"`{_readme_number(scales['volume_average_force'], 2)}`" in readme
-    assert f"`{_readme_number(scales['volume_average_grad_pressure'], 2)}`" in readme
+    evidence = (ROOT / "docs/explanation/validation.md").read_text()
+    assert POLISH_FORCE_ERROR_RECORDS[1] in evidence
+    assert f"`{block['pointwise_eps_f']['normalized_l2']:.3f}`" in evidence
+    assert f"`{_prose_number(scales['magnetic_normalized_l2'], 2)}`" in evidence
+    assert f"`{_prose_number(scales['volume_average_force'], 2)}`" in evidence
+    assert f"`{_prose_number(scales['volume_average_grad_pressure'], 2)}`" in evidence
     assert (
-        f"`{_readme_number(scales['volume_average_magnetic_pressure_gradient'], 2)}`"
-        in readme
+        f"`{_prose_number(scales['volume_average_magnetic_pressure_gradient'], 2)}`"
+        in evidence
     )
 
 
-def test_readme_polish_gain_matches_the_committed_record() -> None:
-    """The README's polish table must be the record, digit for digit.
+def test_validation_polish_gain_matches_the_committed_record() -> None:
+    """The validation page's polish table must be the record, digit for digit.
 
     Every row is read straight out of the artifact at the precision the
-    README prints, so the table cannot drift from the measurement, and the
+    validation page prints, so the table cannot drift from the measurement, and the
     withdrawn "26-fold" claim cannot come back.
     """
     record = json.loads(
         (ROOT / "benchmarks" / POLISH_FORCE_ERROR_RECORDS[0]).read_text()
     )
-    readme = (ROOT / "README.md").read_text()
-    assert POLISH_FORCE_ERROR_RECORDS[0] in readme
-    assert "26-fold" not in readme.split("Earlier versions of this section")[0]
+    evidence = (ROOT / "docs/explanation/validation.md").read_text()
+    assert POLISH_FORCE_ERROR_RECORDS[0] in evidence
+    assert "26-fold" not in evidence.split("Earlier versions of this section")[0]
 
     initial = record["initial_certificate"]["normalizations"]
     final = record["final_certificate"]["normalizations"]
@@ -531,10 +532,10 @@ def test_readme_polish_gain_matches_the_committed_record() -> None:
     ]
     for before, after in quoted:
         for value in (before, after):
-            assert f"`{_readme_number(value)}`" in readme, value
+            assert f"`{_prose_number(value)}`" in evidence, value
         ratio = before / after
         assert (
-            f"{ratio:.2f}x" in readme or f"{ratio:.1f}x" in readme
+            f"{ratio:.2f}x" in evidence or f"{ratio:.1f}x" in evidence
         ), ratio
 
 
@@ -547,8 +548,10 @@ def test_readme_states_the_certificate_ceiling_and_its_selection() -> None:
     readme = (ROOT / "README.md").read_text()
     assert "bounded above by 2 by construction" in readme
     assert "demonstrably wins" not in readme
-    assert "not evidence of\na general advantage" in readme
-    assert "were selected because certified polishing\nimproves them" in readme
+    assert "docs/explanation/validation.md" in readme
+    evidence = (ROOT / "docs/explanation/validation.md").read_text()
+    assert "not a ranking of native solvers" in evidence
+    assert "selected for successful tokamak polishing" in evidence
     page = (
         ROOT / "docs" / "explanation" / "high-order-force-balance.rst"
     ).read_text()
