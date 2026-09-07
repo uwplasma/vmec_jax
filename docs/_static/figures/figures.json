@@ -63,9 +63,7 @@
       "hardware": "Apple M3 Max (arm64), macOS 14.4.1, CPU",
       "reproducible": "command",
       "bytes_verified": true,
-      "used_in": [
-        "README.md"
-      ],
+      "used_in": [],
       "note": "ESSOS two-loop coil set built from constants inside the example. The example calls vmex.mirror.output.plot_axisymmetric_beta_scan_summary with image_format=\"webp\", which writes this composite as lossless WebP straight into docs/_static/figures unless VMEX_EXAMPLES_CI=1 redirects it to results/. Needs the ESSOS optional dependency. Re-rendered on 2026-09-05 and re-derived by a second run that reproduced the bytes."
     },
     {
@@ -181,9 +179,7 @@
       "hardware": "Apple M3 Max (arm64), macOS 14.4.1, CPU",
       "reproducible": "command",
       "bytes_verified": true,
-      "used_in": [
-        "README.md"
-      ],
+      "used_in": [],
       "note": "The example writes its three-panel vmex_fieldline_tracing_finite_beta.png to the working directory and, outside the CI smoke run, crops the phi=0 Poincare panel pair from the same render into this file as lossless WebP, so the crop is no longer done by hand. Needs ESSOS branch rj/vmex-optimization-interfaces (uwplasma/ESSOS#58; run here at its merge commit 1b3210c). Re-rendered on 2026-09-05 and re-derived by a second run that reproduced the bytes."
     },
     {
