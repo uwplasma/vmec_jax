@@ -25,6 +25,8 @@ Shafranov shift (axis moves outboard) and the LCFS response as beta rises.
 Works with any released ESSOS (only ``essos.fields.BiotSavart`` is needed).
 Runtime: ~4 min for the full scan (one NESTOR free-boundary solve per
 calibration attempt); the CI budget solves a single beta point coarsely.
+The README figure is written straight into ``docs/_static/figures`` as
+lossless WebP, so re-running this script reproduces the committed bytes.
 """
 
 import dataclasses
@@ -39,7 +41,7 @@ import vmex as vj
 DATA = Path(__file__).resolve().parent / "data"
 COILS_JSON = DATA / "ESSOS_biot_savart_LandremanPaulQA.json"  # ESSOS coil DOFs
 INPUT_FILE = DATA / "input.LandremanPaul2021_QA_lowres"       # plasma seed deck
-OUT_DIR = Path("output_free_boundary_essos_coils")
+FIGURE = Path(__file__).resolve().parents[1] / "docs" / "_static" / "figures" / "readme_essos_beta_scan.webp"
 TARGET_BETAS = [0.0, 1.0, 2.0, 3.0]   # actual volume-average beta targets [%]
 BETA_TOL = 0.15                       # accept |betatotal - target| below this [%]
 SLOPE = 1.45e-3                       # first-guess beta[%] per unit PRES_SCALE
@@ -145,7 +147,7 @@ if not CI:
     import matplotlib.pyplot as plt
     from vmex.core.plotting import surface_rz
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    FIGURE.parent.mkdir(parents=True, exist_ok=True)
     fig, (ax, ax2) = plt.subplots(1, 2, figsize=(8.4, 4.8), dpi=110, width_ratios=[1.1, 1.0])
     theta = np.linspace(0.0, 2.0 * np.pi, 361)
     shades = ["#b5cde3", "#6d9dc9", "#2e6da4", "#0c3766"]  # light -> dark = rising beta
@@ -165,6 +167,5 @@ if not CI:
     ax2.legend(*ax.get_legend_handles_labels(), loc="upper left", fontsize=9, frameon=False)
     fig.suptitle("Free-boundary LP-QA from ESSOS coils (tabulated to an in-memory mgrid)")
     fig.tight_layout()
-    fig_path = OUT_DIR / "essos_beta_scan.png"
-    fig.savefig(fig_path)
-    print(f"wrote {fig_path}")
+    fig.savefig(FIGURE, pil_kwargs={"lossless": True})
+    print(f"wrote {FIGURE}")

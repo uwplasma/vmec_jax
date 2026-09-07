@@ -486,6 +486,9 @@ def load_free_boundary_restart(
 
 
 _PLOT_DPI = 110
+#: Raster formats the composite plotters accept. WebP is written lossless so a
+#: regenerated documentation figure reproduces the committed bytes.
+_IMAGE_FORMATS = ("png", "webp")
 
 
 def _matplotlib():
@@ -497,10 +500,25 @@ def _matplotlib():
     return plt
 
 
-def _save_figure(fig, plt, path: Path) -> Path:
-    """Write one reviewed plot and release its Matplotlib resources."""
+def _figure_path(outdir: str | Path, name: str, image_format: str) -> Path:
+    """Resolve ``outdir/name.<image_format>``, creating the directory."""
 
-    fig.savefig(path, dpi=_PLOT_DPI, bbox_inches="tight")
+    if image_format not in _IMAGE_FORMATS:
+        raise ValueError(f"image_format must be one of {_IMAGE_FORMATS}, got {image_format!r}")
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    return outdir / f"{name}.{image_format}"
+
+
+def _save_figure(fig, plt, path: Path) -> Path:
+    """Write one reviewed plot and release its Matplotlib resources.
+
+    WebP is written lossless, so re-running a documentation generator
+    reproduces the committed figure byte for byte.
+    """
+
+    save_kwargs = {"pil_kwargs": {"lossless": True}} if path.suffix == ".webp" else {}
+    fig.savefig(path, dpi=_PLOT_DPI, bbox_inches="tight", **save_kwargs)
     plt.close(fig)
     return path
 
@@ -678,17 +696,18 @@ def plot_mirror_3d_pair(
     *,
     titles: tuple[str, str],
     name: str = "mirror_fixed_boundary_3d",
+    image_format: str = "png",
 ) -> Path:
     """Render two solved fixed-boundary mirrors side by side in 3D.
 
     Each panel is coloured by its own LCFS ``|B|`` range with an attached
     colorbar, so an axisymmetric mirror and a rotating-ellipse mirror can be
-    compared at a glance.
+    compared at a glance. ``image_format`` is ``"png"`` or ``"webp"``; the
+    documentation figure is written as lossless WebP.
     """
 
     plt = _matplotlib()
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    path = _figure_path(outdir, name, image_format)
     fig = plt.figure(figsize=(12.6, 4.4), constrained_layout=True)
     grid = fig.add_gridspec(1, 4, width_ratios=(1.0, 0.045, 1.0, 0.045), wspace=0.08)
     for column, (mout, title) in enumerate(zip((left, right), titles, strict=True)):
@@ -714,7 +733,7 @@ def plot_mirror_3d_pair(
             cax=fig.add_subplot(colorbar_slot[1]),
             label="LCFS |B| [T]",
         )
-    return _save_figure(fig, plt, outdir / f"{name}.png")
+    return _save_figure(fig, plt, path)
 
 
 _SCAN_COLORS = ("#0072B2", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "#E69F00")
@@ -727,18 +746,19 @@ def plot_axisymmetric_beta_scan_summary(
     display: tuple[int, ...],
     name: str = "mirror_free_boundary_beta_scan",
     strong_force_gate: float | None = None,
+    image_format: str = "png",
 ) -> Path:
     """Render one tight beta-scan composite: 3D states plus scan diagnostics.
 
     ``entries`` is a sequence of ``(label, mout, supported)`` tuples in
     increasing-beta order; ``display`` selects which entries get a 3D panel.
     All entries appear in the shared diagnostics row. Unsupported
-    (validation-only) entries are drawn dashed.
+    (validation-only) entries are drawn dashed. ``image_format`` is ``"png"``
+    or ``"webp"``; the documentation figure is written as lossless WebP.
     """
 
     plt = _matplotlib()
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    path = _figure_path(outdir, name, image_format)
     loaded = [(label, _as_mout(mout)[0], bool(supported)) for label, mout, supported in entries]
     if not loaded or len(display) < 1:
         raise ValueError("beta-scan summary requires entries and display indices")
@@ -840,7 +860,7 @@ def plot_axisymmetric_beta_scan_summary(
     # A short title only -- the coil geometry, vacuum field, mirror ratio, and
     # beta observables live in docs/explanation/mirror-geometry.rst, not on the figure.
     fig.suptitle("Free-boundary mirror: solved β scan with ESSOS coils")
-    return _save_figure(fig, plt, outdir / f"{name}.png")
+    return _save_figure(fig, plt, path)
 
 
 def plot_mout(
@@ -969,10 +989,16 @@ def plot_stellarator_mirror_hybrid(
     outdir: str | Path,
     *,
     name: str = "stellarator_mirror_hybrid",
+    image_format: str = "png",
 ) -> Path:
-    """Plot a solved periodic two-mirror/stellarator hybrid equilibrium."""
+    """Plot a solved periodic two-mirror/stellarator hybrid equilibrium.
+
+    ``image_format`` is ``"png"`` or ``"webp"``; the documentation figure is
+    written as lossless WebP.
+    """
 
     plt = _matplotlib()
+    path = _figure_path(outdir, name, image_format)
     solved = getattr(result, "evaluated", result)
     discretization, axis = setup.discretization, setup.axis
     if not discretization.closed:
@@ -1137,10 +1163,6 @@ def plot_stellarator_mirror_hybrid(
     convergence.legend(fontsize=8)
     for plot_axis in (map_axis, sections, profiles, convergence):
         plot_axis.grid(alpha=0.2)
-
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    path = outdir / f"{name}.png"
     return _save_figure(fig, plt, path)
 
 

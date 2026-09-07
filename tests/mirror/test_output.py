@@ -278,12 +278,45 @@ def test_mirror_comparison_and_beta_scan_plots(tmp_path) -> None:
             tmp_path,
             display=(0, 1),
             strong_force_gate=1.0e-3,
+            image_format="webp",
         ),
+    ]
+    assert [path.name for path in paths] == [
+        "mirror_fixed_boundary_3d.png",
+        "mirror_free_boundary_beta_scan.webp",
     ]
     for path in paths:
         pixels = mpimg.imread(path)
         assert pixels.shape[0] > 200 and pixels.shape[1] > 300
-        assert float(np.std(pixels)) > 0.03
+        assert float(np.std(pixels / 255.0 if pixels.dtype == np.uint8 else pixels)) > 0.03
+
+
+@pytest.mark.filterwarnings(
+    "ignore:constrained_layout not applied because axes sizes collapsed to zero.*"
+)
+def test_documentation_figures_are_lossless_and_reproducible(tmp_path) -> None:
+    """The docs embed the WebP the examples write, and its bytes are guarded.
+
+    ``docs/_static/figures/figures.json`` records each figure's sha256 and
+    claims the generator reproduces it, so the writer must be lossless (the
+    pixels match the PNG render exactly) and deterministic (two renders give
+    identical bytes).
+    """
+    from PIL import Image
+
+    data = _sample_mout()
+    kwargs = dict(titles=("baseline", "comparison"), name="pair")
+    png = plot_mirror_3d_pair(data, data, tmp_path, **kwargs)
+    webp = plot_mirror_3d_pair(data, data, tmp_path, image_format="webp", **kwargs)
+    assert (png.name, webp.name) == ("pair.png", "pair.webp")
+    assert np.array_equal(
+        np.asarray(Image.open(png).convert("RGB")),
+        np.asarray(Image.open(webp).convert("RGB")),
+    )
+    again = plot_mirror_3d_pair(data, data, tmp_path / "again", image_format="webp", **kwargs)
+    assert again.read_bytes() == webp.read_bytes()
+    with pytest.raises(ValueError, match="image_format"):
+        plot_mirror_3d_pair(data, data, tmp_path, image_format="svg", **kwargs)
 
 
 def test_stellarator_mirror_hybrid_plot(tmp_path) -> None:
